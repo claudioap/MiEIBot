@@ -1,6 +1,10 @@
 import re
 import discord
 import sqlite3
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
 
 escape = '.'
 bot_id = None
