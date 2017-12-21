@@ -3,20 +3,22 @@ import discord
 import sqlite3
 import logging
 
+from commands import populate_commands
+
 logging.basicConfig(level=logging.INFO)
 
-
 escape = '.'
-bot_id = None
-settings = {}
 triggers = {}
 commands = {}
 
+global client
 client = discord.Client()
+global settings
+settings = {}
 
 
 def run():
-    load_db()
+    populate()
     client.run(settings['token'])
 
 
@@ -38,11 +40,24 @@ async def on_member_join(member):
 @client.event
 async def on_message(message):
     answers = 0
-    if message.author.name == 'MiEIBot':
+    if message.author.name == settings['bot_name']:
         return
 
     if message.content.startswith(escape):
-        pass  # TODO for later
+        command = message.content.split()[0]
+        if len(command) < 2:
+            return
+        delete_parent = False
+        if command[1] == '.':
+            delete_parent = True
+        command = command.lstrip('.')
+        if command in commands:
+            command = commands[command]
+            await command(message)
+        else:
+            print("Unknown command: " + command)
+        if delete_parent:
+            client.delete_message(message)
     else:
         for expression in triggers:
             if expression.search(message.content):
@@ -50,6 +65,11 @@ async def on_message(message):
                 await triggers[expression](message)
                 if answers >= 2:
                     break
+
+
+def populate():
+    load_db()
+    populate_commands(commands)
 
 
 def load_db():
