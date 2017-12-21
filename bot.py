@@ -56,8 +56,9 @@ async def on_message(message):
             await command(message)
         else:
             print("Unknown command: " + command)
+
         if delete_parent:
-            client.delete_message(message)
+            await client.delete_message(message)
     else:
         for expression in triggers:
             if expression.search(message.content):
