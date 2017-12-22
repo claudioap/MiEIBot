@@ -40,7 +40,7 @@ async def on_member_join(member):
 @client.event
 async def on_message(message):
     answers = 0
-    if message.author.name == settings['bot_name']:
+    if message.author == client.user:
         return
 
     if message.content.startswith(escape):
@@ -74,7 +74,7 @@ def populate():
 
 
 def load_db():
-    database = sqlite3.connect('discord.db')
+    database = sqlite3.connect('./conf/discord.db')
     populate_settings(database)
     populate_parser_data(database)
     database.close()
