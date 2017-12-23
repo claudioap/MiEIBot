@@ -14,26 +14,21 @@ database = sqlite3.connect(os.path.dirname(__file__) + '/clip.db')
 
 db_cursor = database.cursor()
 db_cursor.execute('SELECT internal_id, id, short_name FROM Institutions')
-
 institutions = {}
-
 for row in db_cursor:
-    institutions[row[0]] = {
-        'id': row[1],
-        'name': row[2],
-        'departments': []
-    }
+    institutions[row[0]] = {'id': row[1], 'name': row[2]}
 
+url_institution_years = 'https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo?institui%E7%E3o={}'
+url_departments = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo?ano_lectivo={}&institui%E7%E3o={}"
+url_classes = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector?institui%E7%E3o={}&ano_lectivo={}&sector={}"
+url_classes_period = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector/ano_lectivo?tipo_de_per%EDodo_lectivo={}&sector={}&ano_lectivo={}&per%EDodo_lectivo={}&institui%E7%E3o={}"
 session = Session()
 
 
 # Check institution years of existence
 def institution_years(session, institution):
     institution_years = []
-    soup = request_to_soup(
-        session.get('https://clip.unl.pt/'
-                    'utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo?institui%E7%E3o='
-                    + str(institution)))
+    soup = request_to_soup(session.get(url_institution_years.format(institution)))
     year = re.compile("\\b\\d{4}\\b")
     elements = soup.find_all(href=year)
     for element in elements:
@@ -44,8 +39,8 @@ def institution_years(session, institution):
 
 def populate_departments(session, database):
     db_cursor = database.cursor()
-    departments = {}  # internal_id -> name
     for institution in institutions:
+        departments = {}  # internal_id -> name
         # Fetch institution ID from DB
         db_cursor.execute('SELECT id FROM Institutions WHERE internal_id=?', (int(institution),))
         institution_row = db_cursor.fetchone()
@@ -56,93 +51,115 @@ def populate_departments(session, database):
         # Find institution years of activity
         years = institution_years(session, institution)
         for year in years:  # Find the departments that existed under each year
-            soup = request_to_soup(session.get("https://clip.unl.pt/"
-                                               "utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo"
-                                               "?ano_lectivo={}&institui%E7%E3o={}".format(year, institution)))
+            soup = request_to_soup(session.get(url_departments.format(year, institution)))
             department_exp = re.compile("\\bsector=\\d+\\b")
             department_links = soup.find_all(href=department_exp)
             for department_link in department_links:
                 match = department_exp.findall(department_link.attrs['href'])[0]
-                department_id = str(match).split('=')[1]
+                department_iid = str(match).split('=')[1]
                 department_name = department_link.contents[0]
 
-                if department_id in departments:  # update creation year
-                    old = departments[department_id]
-                    departments[department_id] = (old[0], year, old[2])
-                    print("Department {} now goes from {} to {}".format(old[0], year, old[2]))
-                else:  # insert new
-                    print("Found: {}({}) in {}".format(department_name, department_id, year))
-                    departments[department_id] = (department_name, year, year)  # (name, creation, last year)
+                if department_iid in departments:  # update creation year
+                    if (departments[department_iid]['institution'] != institution_id):
+                        raise Exception("Department {}({}) found in different institutions id's {} and {}".format(
+                            department_name,
+                            department_iid,
+                            institution_id,
+                            departments[department_iid]['institution']
+                        ))
+                    if departments[department_iid]['creation'] > int(year):
+                        departments[department_iid]['creation'] = int(year)
+                    elif departments[department_iid]['last_year'] < int(year):
+                        departments[department_iid]['last_year'] = int(year)
 
-        # Add departments to the database
-        for department_id, department_info in departments.items():
+                else:  # insert new
+                    print("Found: {}({}) in {}".format(department_name, department_iid, year))
+                    departments[department_iid] = {
+                        'name': department_name,
+                        'creation': int(year),
+                        'last_year': int(year),
+                        'institution': institution_id
+                    }
+
+        # add departments to the database
+        for department_iid, department_info in departments.items():
             db_cursor.execute('SELECT name, creation, last_year '
-                              'FROM Departments WHERE institution=? AND internal_id=?',
-                              (institution_id, int(department_id)))
+                              'FROM Departments '
+                              'WHERE institution=? AND internal_id=?',
+                              (institution_id, department_iid))
             exists = False
             different = False
             for row in db_cursor.fetchall():
-                if row[0] != department_info[0]:
+                if row[0] != department_info['name']:
                     raise Exception("Different departments had an id collision")
 
-                #   creation date the same and end date the same
-                elif row[1] != int(department_info[1]) or row[2] != int(department_info[2]):
+                # creation date different or  last year different
+                elif row[1] != int(department_info['creation']) or row[2] != int(department_info['last_year']):
                     different = True
                     exists = True
 
-            if not exists:  # Unknown department, add it to the DB
+            if not exists:  # unknown department, add it to the DB
                 print("Adding  {}({}) {} - {} to the database".format(
-                    department_info[0], department_id, department_info[1], department_info[2]))
+                    department_info['name'],
+                    department_iid,
+                    department_info['creation'],
+                    department_info['last_year']))
                 db_cursor.execute(
                     'INSERT INTO Departments(internal_id, name, creation, last_year, institution) '
                     'VALUES (?, ?, ?, ?, ?)',
-                    (department_id, department_info[0], int(department_info[1]), int(department_info[2]),
+                    (department_iid,
+                     department_info['name'],
+                     department_info['creation'],
+                     department_info['last_year'],
                      institution_id))
 
-            if different:
-                print("Updating department {} now goes from {} to {}".format(
-                    department_info[0], department_info[1], department_info[2]))
-                db_cursor.execute('UPDATE Departments SET (creation, last_year) = (?, ?) '
-                                  'WHERE internal_id=?',
-                                  (int(department_info[1]), int(department_info[2]), department_info[0]))
+            if different:  # department changed
+                print("Updating department {} (now goes from {} to {})".format(
+                    department_info['name'], department_info['creation'], department_info['last_year']))
+                db_cursor.execute(
+                    'UPDATE Departments '
+                    'SET creation = ?, last_year=? '
+                    'WHERE internal_id=? AND institution=?',
+                    (department_info['creation'],
+                     department_info['last_year'],
+                     department_iid,
+                     department_info['institution']))
 
         database.commit()
         print("Changes saved")
 
 
-def populate_courses(session, database):
+def populate_classes(session, database):
     db_cursor = database.cursor()
     db_cursor.execute('SELECT Departments.id, Departments.internal_id, Institutions.internal_id, '
                       'Departments.creation, Departments.last_year '
                       'FROM Departments JOIN Institutions '
                       'WHERE Departments.institution = Institutions.id')
+    class_id_cache = {}
+    class_department_cache = {}
 
-    for row in db_cursor.fetchall():
+    for row in db_cursor.fetchall():  # for every department
+        classes = {}
+        class_instances = {}
         department_id = row[0]
         department_iid = row[1]
         institution_iid = row[2]
         department_creation = row[3]
         department_last_year = row[4]
-        classes = {}
-        class_instances = {}
         period_ids = {}  # cache with [stages][stage] -> id
 
         # for each year this department operated
         for year in range(department_creation, department_last_year + 1):
-            soup = request_to_soup(session.get("https://clip.unl.pt/"
-                                               "utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector"
-                                               "?institui%E7%E3o={}&ano_lectivo={}&sector={}"
-                                               "".format(institution_iid, year, department_iid)))
+            soup = request_to_soup(session.get(url_classes.format(institution_iid, year, department_iid)))
             period_links = soup.find_all(href=re.compile("\\bper%EDodo_lectivo=\\d\\b"))
 
-            # for each period from this department
+            # for each period this department teaches
             for period_link in period_links:
                 parts = period_link.attrs['href'].split('&')
                 stage = parts[-1].split('=')[1]
                 stages_letter = parts[-2].split('=')[1]
-                stages = None
                 if stages_letter == 't':
-                    stages = 3
+                    stages = 4
                 elif stages_letter == 's':
                     stages = 2
                 elif stages_letter == 'a':
@@ -165,11 +182,7 @@ def populate_courses(session, database):
                         period_ids[stages][stage] = period_id
 
                 soup = request_to_soup(
-                    session.get("https://clip.unl.pt/"
-                                "utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector/ano_lectivo"
-                                "?tipo_de_per%EDodo_lectivo={}&sector={}&ano_lectivo={}"
-                                "&per%EDodo_lectivo={}&institui%E7%E3o={}"
-                                "".format(stages_letter, department_iid, year, stage, institution_iid)))
+                    session.get(url_classes_period.format(stages_letter, department_iid, year, stage, institution_iid)))
 
                 class_links = soup.find_all(href=re.compile("\\bunidade_curricular=\\b"))
                 for class_link in class_links:
@@ -182,6 +195,7 @@ def populate_courses(session, database):
                             'name': class_name,
                             'department': department_id
                         }
+                        class_department_cache[class_iid] = department_id
                     if class_iid not in class_instances:
                         class_instances[class_iid] = []
 
@@ -190,26 +204,83 @@ def populate_courses(session, database):
                         'year': year
                     })
 
-        # Add class to the database
+        # add class to the database
         for class_iid, class_info in classes.items():
-            db_cursor.execute(
-                'SELECT name FROM Classes WHERE internal_id=? AND department=?',
-                (class_iid, int(class_info['department'])))
+            db_cursor.execute('SELECT name '
+                              'FROM Classes '
+                              'WHERE internal_id=? AND department=?',
+                              (class_iid, int(class_info['department'])))
 
             exists = False
-            for row in db_cursor.fetchall():
-                if row[0] != class_info['name']:
+            for row in db_cursor.fetchall():  # for every class matching the iid and department
+                if row[0] != class_info['name']:  # if their names don't match
                     raise Exception("Different classes had an id collision {} with {}, id was {}".format(
                         class_info['name'], row[0], class_iid
                     ))
-                else:
+                else:  # identical class was already in the db
                     print("Class already known: {}({})".format(class_info['name'], class_iid))
                     exists = True
 
-            if not exists:  # Unknown class, add it to the DB
+            if not exists:  # unknown class, add it to the DB
                 print("Adding  {}({}) to the database".format(class_info['name'], class_iid))
                 db_cursor.execute('INSERT INTO Classes(internal_id, name, department) VALUES (?, ?, ?)',
                                   (class_iid, class_info['name'], class_info['department']))
+
+        database.commit()
+        print("Changes saved")
+
+        # fetch assigned class ids
+        db_cursor.execute('SELECT id, internal_id, department FROM Classes')
+
+        for row in db_cursor.fetchall():
+            class_id = row[0]
+            class_iid = row[1]
+            class_department = row[2]
+
+            if class_iid not in classes:  # class was not fetched now
+                continue
+
+            class_dict = classes[class_iid]
+            if class_dict['department'] != class_department:  # if different department, this this is a different class
+                continue
+
+            class_dict['id'] = class_id  # class id
+
+        # add class instance to the database
+        for class_iid, class_instances_info in class_instances.items():
+            # figure out if the class id is unknown
+            if class_iid not in class_id_cache:
+                # fetch it if needed
+                db_cursor.execute('SELECT id '
+                                  'FROM Classes '
+                                  'WHERE internal_id=? AND department=?',
+                                  (class_iid, class_department_cache[class_iid]))
+                result = db_cursor.fetchone()
+                if result is None:
+                    raise Exception("Unknown class iid for {}, info: {}".format(class_iid, class_instances))
+                class_id_cache[class_iid] = result[0]
+
+            # obtain the class id from the cache
+            class_id = class_id_cache[class_iid]
+
+            for instance in class_instances_info:  # for every instance of a class
+                db_cursor.execute('SELECT period, year '
+                                  'FROM ClassInstances '
+                                  'WHERE class=?',
+                                  (class_id,))
+                exists = False  # figure if it is already in the db
+                for row in db_cursor.fetchall():  # for every class matching the iid and department
+                    if row[0] == instance['period'] and row[1] == instance['year']:
+                        exists = True
+                        break
+
+                if not exists:  # unknown class instance, add it to the DB
+                    print("Adding  {}({}) instance in period {} of {} to the database".format(
+                        classes[class_iid]['name'], classes[class_iid]['id'],
+                        instance['period'], instance['year']))
+                    db_cursor.execute('INSERT INTO ClassInstances(class, period, year) '
+                                      'VALUES (?, ?, ?)',
+                                      (class_id, instance['period'], instance['year']))
 
         database.commit()
         print("Changes saved")
@@ -234,4 +305,4 @@ def request_to_soup(request):
 
 
 # populate_departments(session, database)
-populate_courses(session, database)
+populate_classes(session, database)
