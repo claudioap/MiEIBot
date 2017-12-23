@@ -34,13 +34,12 @@ class Session:
 
     def authenticate(self):
         request = self.__requests_session__.post(clip.base_url, headers=http_headers, data=login_params)
+        if "password" in request.text:
+            raise Exception("CLIP authentication failed")
+        self.authenticated = True
         log.info('Successfully authenticated')
-        # TODO verify if succeeded
         self.save()
 
     def get(self, url):
         log.info('Fetching:' + url)
         return self.__requests_session__.get(url, headers=http_headers)
-
-
-session = Session()
