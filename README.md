@@ -25,3 +25,20 @@ These are the required tables for it to work:
 | name | url |
 |--|--|
 | [embed name] | [embed url] |
+
+
+### Commands
+Messages starting with a specified escape ('.' by default) will attempt to trigger a command.
+
+TODO: List of commands
+
+### University system integration
+We're working to integrate this bot with our amazing (maybe not that much) university system (CLIP).
+In case you have no clue of what it is then any reference to it means "avoid at all costs".
+
+There is a crawler to download every relevant public information out of CLIP in order to populate the bot database (and update it when needed).
+It requires student credentials.
+Even if you're a student and have the all mighty credentials, its probably not something you'll want to try.
+
+If you're brave and want to try it, or want that information for something else (please don't be evil), it takes several hours to bootstrap the database, and it's a somewhat error-prone process, which for the bot was done step-by-step, one entity at a time.
+Avoid doing so during times that might disturb other students access to CLIP. This thing does about 2-3 requests every second. 1AM-6AM(GMT) its probably your best shot.
