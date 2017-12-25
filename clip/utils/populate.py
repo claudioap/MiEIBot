@@ -435,7 +435,8 @@ def populate_courses(session, database):
         print("Changes saved")
 
 
-def populate_students(session, database):
+# populate student list from the national access contest (also obtain their preferences and current status)
+def populate_nac_students(session, database):
     db_cursor = database.cursor()
     course_id_cache = {}
     for institution in institutions:
@@ -444,43 +445,50 @@ def populate_students(session, database):
             courses = set()
             soup = request_to_soup(session.get(url_admissions.format(year, institution)))
             course_links = soup.find_all(href=re.compile("\\bcurso=\\d+$"))
-            for course_link in course_links:
+            for course_link in course_links:  # find every course that had students that year
                 courses.add(course_link.attrs['href'].split('=')[-1])
-            for course_iid in courses:
-                if course_iid not in course_id_cache:
+
+            for course_iid in courses:  # for every course
+                if course_iid not in course_id_cache:  # if its id is unknown, fetch it
                     db_cursor.execute("SELECT id FROM Courses WHERE internal_id=?", (course_iid,))
-                    course_id = db_cursor.fetchone()[0]
+                    course_id = db_cursor.fetchone()[0]  # assuming the course list is populated at this point
                     course_id_cache[course_iid] = course_id
                 course_id = course_id_cache[course_iid]
 
-                for phase in range(1, 4):
+                for phase in range(1, 4):  # for every of the three phases
                     soup = request_to_soup(session.get(url_admitted.format(year, institution, phase, course_iid)))
+                    # find the table structure containing the data (only one with those attributes)
                     table_root = soup.find('th', colspan="8", bgcolor="#95AEA8").parent.parent
-                    for tag in soup.find_all('th'):
+
+                    for tag in soup.find_all('th'):  # for every table header
                         if tag.parent is not None:
-                            tag.parent.decompose()
+                            tag.parent.decompose()  # remove its parent row
+
                     table_rows = table_root.find_all('tr')
-                    for row in table_rows:
-                        children = list(row.children)
-                        name = children[1].text.strip()
-                        document_number = children[3].text.strip()
-                        try:
-                            option = int(children[9].text.strip())
-                        except ValueError:
-                            option = None
-                        student_iid = children[11].text.strip()
-                        state = children[13].text.strip()
+                    for table_row in table_rows:  # for every student admission
+                        table_row = list(table_row.children)
+
+                        # take useful information
+                        name = table_row[1].text.strip()
+                        document_number = table_row[3].text.strip()
+                        option = table_row[9].text.strip()
+                        student_iid = table_row[11].text.strip()
+                        state = table_row[13].text.strip()
+
+                        student_iid = student_iid if student_iid != '' else None
                         document_number = document_number if document_number != '' else None
+                        option = None if option == '' else int(option)
                         state = state if state != '' else None
 
                         student_id = None
+                        # if the student as an iid find if the student is registered in this database
                         while student_iid is not None and student_id is None:
                             db_cursor.execute("SELECT id "
                                               "FROM Students "
                                               "WHERE internal_id=? AND institution=?",
                                               (student_iid, institutions[institution]['id']))
                             students = db_cursor.fetchall()
-                            if len(students) == 0:
+                            if len(students) == 0:  # unknown student, insert it
                                 # TODO update course to actual course at the end
                                 db_cursor.execute("INSERT INTO STUDENTS(name, internal_id, course, institution) "
                                                   "VALUES (?, ?, ?, ?)",
@@ -488,12 +496,12 @@ def populate_students(session, database):
                                                    student_iid,
                                                    course_id,
                                                    institutions[institution]['id']))
-                            elif len(students) == 1:
+                            elif len(students) == 1:  # known student, assign db id
                                 student_id = students[0][0]
                             else:
                                 raise Exception("Multiple students with a single iid within the same institution")
 
-                        print("Found {}({}). Admitted in the phase {} of {} (option:{}). Current state: {}".format(
+                        print("Found {}(iid: {}). Admitted in the phase {} of {} (option:{}). Current state: {}".format(
                             name, student_iid, phase, year, option, state))
                         name = name if student_id is None else None
                         db_cursor.execute(
@@ -535,4 +543,4 @@ def request_to_soup(request):
 populate_departments(session, database)
 populate_classes(session, database)
 populate_courses(session, database)
-populate_students(session, database)
+populate_nac_students(session, database)
