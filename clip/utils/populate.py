@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import re
 import os.path
+from datetime import datetime
 from bs4 import BeautifulSoup
 from clip import Session
 
@@ -10,11 +11,11 @@ logging.basicConfig(level=logging.INFO)
 if not os.path.isfile(os.path.dirname(__file__) + '/clip.db'):
     print("No database")
     exit(1)
-database = sqlite3.connect(os.path.dirname(__file__) + '/clip.db')
+database = sqlite3.connect(os.path.dirname(__file__) + '/clip.db', detect_types=sqlite3.PARSE_DECLTYPES)
 
 db_cursor = database.cursor()
 db_cursor.execute('SELECT internal_id, id, short_name FROM Institutions')
-institutions = {}
+institutions = {}  # those were pre-populated by hand. TODO populate with code, just to be able to say its 100% automatic
 for row in db_cursor:
     institutions[row[0]] = {'id': row[1], 'name': row[2]}
 
@@ -35,6 +36,8 @@ url_class_enrolled = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_or
 url_class_exam_enrolled_file = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector/ano_lectivo/unidade_curricular/actividade/testes_de_avalia%E7%E3o/inscritos?institui%E7%E3o={}&%EDndice={}&sector={}&ano_lectivo={}&tipo_de_per%EDodo_lectivo={}&tipo={}&per%EDodo_lectivo={}&unidade_curricular={}&%E9poca={}&aux=ficheiro"
 url_exam_grades = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector/ano_lectivo/unidade_curricular/actividade/testes_de_avalia%E7%E3o/inscritos?tipo_de_per%EDodo_lectivo={}&sector={}&ano_lectivo={}&per%EDodo_lectivo={}&institui%E7%E3o={}&unidade_curricular={}&%E9poca={}&tipo={}&%EDndice={}"
 url_statistics = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/estat%EDstica/alunos/evolu%E7%E3o?institui%E7%E3o={}&n%EDvel_acad%E9mico={}"
+
+curr_datetime = datetime.now()
 session = Session()
 
 
@@ -45,7 +48,7 @@ def institution_years(session, institution):
     year = re.compile("\\b\\d{4}\\b")
     elements = soup.find_all(href=year)
     for element in elements:
-        match = year.findall(element.attrs['href'])[0]
+        match = int(year.findall(element.attrs['href'])[0])
         institution_years.append(match)
     return institution_years
 
@@ -80,17 +83,17 @@ def populate_departments(session, database):
                             institution_id,
                             departments[department_iid]['institution']
                         ))
-                    if departments[department_iid]['creation'] > int(year):
-                        departments[department_iid]['creation'] = int(year)
-                    elif departments[department_iid]['last_year'] < int(year):
-                        departments[department_iid]['last_year'] = int(year)
+                    if departments[department_iid]['creation'] > year:
+                        departments[department_iid]['creation'] = year
+                    elif departments[department_iid]['last_year'] < year:
+                        departments[department_iid]['last_year'] = year
 
                 else:  # insert new
                     print("Found: {}({}) in {}".format(department_name, department_iid, year))
                     departments[department_iid] = {
                         'name': department_name,
-                        'creation': int(year),
-                        'last_year': int(year),
+                        'creation': year,
+                        'last_year': year,
                         'institution': institution_id
                     }
 
@@ -432,6 +435,85 @@ def populate_courses(session, database):
         print("Changes saved")
 
 
+def populate_students(session, database):
+    db_cursor = database.cursor()
+    course_id_cache = {}
+    for institution in institutions:
+        years = institution_years(session, institution)
+        for year in years:
+            courses = set()
+            soup = request_to_soup(session.get(url_admissions.format(year, institution)))
+            course_links = soup.find_all(href=re.compile("\\bcurso=\\d+$"))
+            for course_link in course_links:
+                courses.add(course_link.attrs['href'].split('=')[-1])
+            for course_iid in courses:
+                if course_iid not in course_id_cache:
+                    db_cursor.execute("SELECT id FROM Courses WHERE internal_id=?", (course_iid,))
+                    course_id = db_cursor.fetchone()[0]
+                    course_id_cache[course_iid] = course_id
+                course_id = course_id_cache[course_iid]
+
+                for phase in range(1, 4):
+                    soup = request_to_soup(session.get(url_admitted.format(year, institution, phase, course_iid)))
+                    table_root = soup.find('th', colspan="8", bgcolor="#95AEA8").parent.parent
+                    for tag in soup.find_all('th'):
+                        if tag.parent is not None:
+                            tag.parent.decompose()
+                    table_rows = table_root.find_all('tr')
+                    for row in table_rows:
+                        children = list(row.children)
+                        name = children[1].text.strip()
+                        document_number = children[3].text.strip()
+                        try:
+                            option = int(children[9].text.strip())
+                        except ValueError:
+                            option = None
+                        student_iid = children[11].text.strip()
+                        state = children[13].text.strip()
+                        document_number = document_number if document_number != '' else None
+                        state = state if state != '' else None
+
+                        student_id = None
+                        while student_iid is not None and student_id is None:
+                            db_cursor.execute("SELECT id "
+                                              "FROM Students "
+                                              "WHERE internal_id=? AND institution=?",
+                                              (student_iid, institutions[institution]['id']))
+                            students = db_cursor.fetchall()
+                            if len(students) == 0:
+                                # TODO update course to actual course at the end
+                                db_cursor.execute("INSERT INTO STUDENTS(name, internal_id, course, institution) "
+                                                  "VALUES (?, ?, ?, ?)",
+                                                  (name,
+                                                   student_iid,
+                                                   course_id,
+                                                   institutions[institution]['id']))
+                            elif len(students) == 1:
+                                student_id = students[0][0]
+                            else:
+                                raise Exception("Multiple students with a single iid within the same institution")
+
+                        print("Found {}({}). Admitted in the phase {} of {} (option:{}). Current state: {}".format(
+                            name, student_iid, phase, year, option, state))
+                        name = name if student_id is None else None
+                        db_cursor.execute(
+                            'INSERT INTO Admissions '
+                            '(student_id, course_id, phase, year, option, state, check_date, document, name) '
+                            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                            (student_id,
+                             course_id,
+                             phase,
+                             year,
+                             option,
+                             state,
+                             curr_datetime,
+                             document_number,
+                             name if student_id is None else None))
+
+                    database.commit()
+                    print("Changes saved")
+
+
 def request_to_soup(request):
     soup = BeautifulSoup(request.text, 'html.parser')
     # Take useless stuff out of the way for better debugging.
@@ -453,3 +535,4 @@ def request_to_soup(request):
 populate_departments(session, database)
 populate_classes(session, database)
 populate_courses(session, database)
+populate_students(session, database)
