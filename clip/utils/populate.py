@@ -38,7 +38,51 @@ url_exam_grades = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organ
 url_statistics = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/estat%EDstica/alunos/evolu%E7%E3o?institui%E7%E3o={}&n%EDvel_acad%E9mico={}"
 
 curr_datetime = datetime.now()
+
+class_id_cache = {}
+class_department_cache = {}
+periods = {}  # cache with [letter][stage] -> db id  eg: period_cache['t'][2] for the 2º trimester id
+db_cursor.execute('SELECT stages, stage, id, type_letter FROM Periods')
+for row in db_cursor:
+    if row[3] not in periods:
+        periods[row[3]] = {}
+
+    if row[1] not in periods[row[3]]:
+        periods[row[3]] = {}
+    periods[row[3]][row[1]] = row[2]
+course_id_cache = {}
+course_abbr_cache = {}
+db_cursor.execute('SELECT id, abbreviation, initial_year, final_year FROM Courses')
+for row in db_cursor:
+    if row[1] not in course_abbr_cache:
+        course_abbr_cache[row[1]] = []
+    course_abbr_cache[row[1]].append({
+        'id': row[0],
+        'start': row[2],
+        'end': row[3]
+    })
+
 session = Session()
+
+
+def abbr_to_course_id(abbr, year=None):
+    short_abbr = abbr.split('/')[0]  # FIXME consider specializations
+
+    if abbr in course_abbr_cache:
+        matches = course_abbr_cache[abbr]
+    elif short_abbr in course_abbr_cache:
+        matches = course_abbr_cache[short_abbr]
+    else:
+        return None
+
+    if len(matches) == 0:
+        return None
+    elif len(matches) == 1:
+        return matches[0]['id']
+    else:
+        for match in matches:
+            if match['start'] <= year <= match['end']:
+                return match['id']
 
 
 # Check institution years of existence
@@ -151,8 +195,6 @@ def populate_classes(session, database):
                       'Departments.creation, Departments.last_year '
                       'FROM Departments JOIN Institutions '
                       'WHERE Departments.institution = Institutions.id')
-    class_id_cache = {}
-    class_department_cache = {}
 
     for row in db_cursor.fetchall():  # for every department
         classes = {}
@@ -162,7 +204,6 @@ def populate_classes(session, database):
         institution_iid = row[2]
         department_creation = row[3]
         department_last_year = row[4]
-        period_ids = {}  # cache with [stages][stage] -> id
 
         # for each year this department operated
         for year in range(department_creation, department_last_year + 1):
@@ -173,32 +214,13 @@ def populate_classes(session, database):
             for period_link in period_links:
                 parts = period_link.attrs['href'].split('&')
                 stage = parts[-1].split('=')[1]
-                stages_letter = parts[-2].split('=')[1]
-                if stages_letter == 't':
-                    stages = 4
-                elif stages_letter == 's':
-                    stages = 2
-                elif stages_letter == 'a':
-                    stages = 1
-                else:
+                period_letter = parts[-2].split('=')[1]
+                if period_letter not in periods:
                     raise Exception("Unknown period")
 
-                if stages in period_ids and stage in period_ids[stages]:
-                    period_id = period_ids[stages][stage]
-                else:
-                    db_cursor.execute('SELECT id FROM Periods WHERE stage=? AND stages=?',
-                                      (stage, stages))
-                    row = db_cursor.fetchone()
-                    if row is None:
-                        raise Exception("Unknown period")
-                    else:
-                        period_id = row[0]
-                        if stages not in period_ids:
-                            period_ids[stages] = {}
-                        period_ids[stages][stage] = period_id
-
+                period_id = periods[period_letter][stage]
                 soup = request_to_soup(
-                    session.get(url_classes_period.format(stages_letter, department_iid, year, stage, institution_iid)))
+                    session.get(url_classes_period.format(period_letter, department_iid, year, stage, institution_iid)))
 
                 class_links = soup.find_all(href=re.compile("\\bunidade_curricular=\\b"))
                 for class_link in class_links:
@@ -435,10 +457,64 @@ def populate_courses(session, database):
         print("Changes saved")
 
 
+# adds/updates the student information (changes nothing in case information matches). Returns student id, builds cache
+def add_student_info(database, student_iid, name, course_id=None, abbr=None, institution_id=None):
+    db_cursor = database.cursor()
+    db_cursor.execute('SELECT id, name, abbreviation, course, institution '
+                      'FROM Students '
+                      'WHERE internal_id=?',
+                      (student_iid,))
+
+    matching_students = db_cursor.fetchall()
+    registered = False
+    if len(matching_students) == 0:  # new student, add him
+        print("New student saved")
+        db_cursor.execute("INSERT INTO STUDENTS(name, internal_id, abbreviation, course, institution) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          (name,
+                           student_iid,
+                           abbr,
+                           course_id,
+                           institution_id))
+    elif len(matching_students) == 1:
+        registered = True
+    else:  # bug or several institutions (don't know if it is even possible)
+        raise Exception("FIXME later")
+
+    if registered:
+        stored_id = matching_students[0][0]
+        stored_name = matching_students[0][1]
+        stored_abbr = matching_students[0][2]
+        stored_course = matching_students[0][3]
+        stored_institution = matching_students[0][4]
+
+        if stored_name != name.strip():
+            raise Exception("Time for some manual intervention")
+
+        if abbr is not None and stored_abbr is not None and stored_abbr != abbr.strip():
+            raise Exception("Time for some manual intervention")
+
+        if stored_abbr != abbr or stored_course != course_id or stored_institution != institution_id:
+            new_abbr = stored_abbr if abbr is None else abbr
+            new_institution = stored_institution if institution_id is None else institution_id
+            new_course = stored_course if course_id is None else course_id
+            db_cursor.execute("UPDATE STUDENTS "
+                              "SET abbreviation=?, institution=?, course=? "
+                              "WHERE internal_id=?",
+                              (new_abbr, new_institution, new_course, student_iid))
+            print("Updated student info")
+            return stored_id
+
+    db_cursor.execute('SELECT id '
+                      'FROM Students '
+                      'WHERE internal_id=?',
+                      (student_iid,))
+    return db_cursor.fetchone()[0]
+
+
 # populate student list from the national access contest (also obtain their preferences and current status)
 def populate_nac_students(session, database):
     db_cursor = database.cursor()
-    course_id_cache = {}
     for institution in institutions:
         years = institution_years(session, institution)
         for year in years:
@@ -481,25 +557,11 @@ def populate_nac_students(session, database):
                         state = state if state != '' else None
 
                         student_id = None
-                        # if the student as an iid find if the student is registered in this database
-                        while student_iid is not None and student_id is None:
-                            db_cursor.execute("SELECT id "
-                                              "FROM Students "
-                                              "WHERE internal_id=? AND institution=?",
-                                              (student_iid, institutions[institution]['id']))
-                            students = db_cursor.fetchall()
-                            if len(students) == 0:  # unknown student, insert it
-                                # TODO update course to actual course at the end
-                                db_cursor.execute("INSERT INTO STUDENTS(name, internal_id, course, institution) "
-                                                  "VALUES (?, ?, ?, ?)",
-                                                  (name,
-                                                   student_iid,
-                                                   course_id,
-                                                   institutions[institution]['id']))
-                            elif len(students) == 1:  # known student, assign db id
-                                student_id = students[0][0]
-                            else:
-                                raise Exception("Multiple students with a single iid within the same institution")
+
+                        if student_iid is not None:  # if the student has an iid add it to the database
+                            student_id = add_student_info(
+                                database, student_iid, name, course_id=course_id,
+                                institution_id=institutions[institution]['id'])
 
                         print("Found {}(iid: {}). Admitted in the phase {} of {} (option:{}). Current state: {}".format(
                             name, student_iid, phase, year, option, state))
@@ -522,8 +584,76 @@ def populate_nac_students(session, database):
                     print("Changes saved")
 
 
+def populate_class_instances(session, database):
+    db_cursor = database.cursor()
+    db_cursor.execute('SELECT DISTINCT year FROM ClassInstances ORDER BY year DESC')
+    years = []
+    for year in db_cursor.fetchall():
+        years.append(year[0])
+
+    db_cursor.execute('SELECT class_instance_id, class_iid, period_stage, period_letter, '
+                      'year, department_iid, institution_iid '
+                      'FROM ClassInstancesComplete '
+                      'ORDER BY year DESC')
+
+    for row in db_cursor.fetchall():
+        crawl_class_instance(session, database, {
+            'class_instance': row[0],
+            'class': row[1],
+            'period': row[2],
+            'period_type': row[3],
+            'year': row[4],
+            'department': row[5],
+            'institution': row[6]
+        })
+
+
+def crawl_class_instance(session, database, class_info):
+    soup = request_to_soup(
+        session.get(url_class_enrolled.format(
+            class_info['period_type'], class_info['department'],
+            class_info['year'], class_info['period'],
+            class_info['institution'], class_info['class']
+        )))
+
+    # Strip file header and split it into lines
+    content = soup.text.splitlines()[4:]
+
+    institution_id = institutions[class_info['institution']]['id']
+    for line in content:  # for every student enrollment
+        information = line.split('\t')
+        if len(information) != 7:
+            print("Invalid line")
+            continue
+        # take usefull information
+        student_statutes = information[0].strip()
+        student_name = information[1].strip()
+        student_iid = information[2].strip()
+        student_abbr = information[3].strip()
+        course_abbr = information[4].strip()
+        attempt = int(information[5].strip().rstrip('ºª'))
+        student_year = int(information[6].strip().rstrip('ºª'))
+
+        course_id = abbr_to_course_id(course_abbr, year=class_info['year'])  # find course id
+        # update student info and take id
+        student_id = add_student_info(
+            database, student_iid, student_name, course_id=course_id, abbr=student_abbr, institution_id=institution_id)
+        # insert enrollment information to the database
+        print("{}({}, {}) enrolled to {} for the {} time (grade {})".format(
+            student_name, student_abbr, student_iid, class_info['class'], attempt, student_year))
+        db_cursor.execute("INSERT INTO  Enrollments(student_id, class_instance, attempt, student_year, statutes) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          (student_id, class_info['class_instance'], attempt, student_year, student_statutes))
+    database.commit()
+    print("Saved")
+
+
 def request_to_soup(request):
     soup = BeautifulSoup(request.text, 'html.parser')
+    if soup.find(type="password") is not None:
+        print("Deauthenticated. Trying to reauthenticate")
+        session.authenticate()
+        soup = BeautifulSoup(request.text, 'html.parser')
     # Take useless stuff out of the way for better debugging.
     # Also spend some time on it to avoid loading the server too much
     for tag in soup.find_all('script'):
@@ -535,7 +665,7 @@ def request_to_soup(request):
     for tag in soup.find_all('meta'):
         tag.decompose()
     if soup.find(type="password") is not None:
-        print("Shit happened")
+        print("Unable to authenticate. Exiting")
         exit()
     return soup
 
@@ -544,3 +674,4 @@ populate_departments(session, database)
 populate_classes(session, database)
 populate_courses(session, database)
 populate_nac_students(session, database)
+populate_class_instances(session, database)

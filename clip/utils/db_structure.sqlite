@@ -1,3 +1,8 @@
+/* TODO:
+   - Foreign keys & other constraints
+   - Remove calculable fields (if their caching don't give that much of a performance benefit)
+ */
+
 /* Independent tables: */
 CREATE TABLE "Degrees" (
   `id`          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,8 +131,8 @@ CREATE TABLE `TurnTeachers` (
 
 /* Dependencies: Students, Classes */
 CREATE TABLE "Enrollments" (
-  `student_id`     INTEGER,
-  `class_instance` INTEGER,
+  `student_id`     INTEGER NOT NULL,
+  `class_instance` INTEGER NOT NULL,
   `attempt`        INTEGER, /* Attempt that this enrollment constituted */
   `student_year`   INTEGER, /* The year/grade the student was considered to have as of this enrollment */
   `statutes`       TEXT, /* Statutes giving the student benefits on this enrollment */
