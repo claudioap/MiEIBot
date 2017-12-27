@@ -85,8 +85,8 @@ def populate_settings(database):
     db_cursor.execute(
         'SELECT name, value'
         ' FROM Settings')
-    for row in db_cursor.fetchall():
-        settings[row[0]] = row[1]
+    global settings
+    settings = {row[0]: row[1] for row in db_cursor.fetchall()}
 
 
 def populate_parser_data(database):
@@ -99,17 +99,16 @@ def populate_parser_data(database):
     for row in db_cursor.fetchall():
         if row[2] is None and row[1] is not None:
             triggers[re.compile(row[0])] = lambda message, text=row[1]: client.send_message(message.channel, text)
-        elif row[1] is None and row[2] is not None:
+        elif row[2] is not None:
             embed = discord.Embed()
             embed.set_image(url=row[2])
-            triggers[re.compile(row[0])] = lambda message, embed=embed: client.send_message(message.channel,
-                                                                                            embed=embed)
-        elif row[1] is not None and row[2] is not None:
-            embed = discord.Embed()
-            embed.set_image(url=row[2])
-            triggers[re.compile(row[0])] = lambda message, text=row[1], embed=embed: client.send_message(
-                message.channel,
-                text,
-                embed=embed)
+            if row[1] is None:
+                triggers[re.compile(row[0])] = lambda message, embed=embed: client.send_message(message.channel,
+                                                                                                embed=embed)
+            else:
+                triggers[re.compile(row[0])] = lambda message, text=row[1], embed=embed: client.send_message(
+                    message.channel,
+                    text,
+                    embed=embed)
         else:
             print("Invalid row: " + str(row))
