@@ -11,4 +11,5 @@ A crawler meant to fetch information from the CLIP education system
 
 from clip.session import Session
 from clip.database import Database
+from clip.controller import Controller
 import clip.urls

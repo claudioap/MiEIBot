@@ -1,8 +1,13 @@
 import sqlite3
 import threading
 import os
+import re
 from datetime import datetime
 from queue import Queue
+
+
+def escape(string):
+    return str(re.sub(re.compile("[^\w\d\s.-]", re.UNICODE), "", string))
 
 
 class Database:
@@ -541,5 +546,20 @@ class Database:
         self.lock.aquire()
         try:
             self.link.commit()
+        finally:
+            self.lock.release()
+
+    def find_student(self, name):
+        nice_try = escape(name)
+        query_string = '%'
+        for word in nice_try.split():
+            query_string += (word + '%')
+
+        self.lock.acquire()
+        try:
+            self.cursor.execute("SELECT internal_id, name, abbreviation "
+                                "FROM Students "
+                                "WHERE name LIKE '{}'".format(query_string))
+            return set(self.cursor.fetchall())
         finally:
             self.lock.release()
