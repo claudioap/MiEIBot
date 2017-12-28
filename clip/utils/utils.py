@@ -36,3 +36,12 @@ def abbr_to_course_iid(database, abbr, year=None):
         for match in matches:
             if match['start'] <= year <= match['end']:
                 return match['id']
+
+
+def weekday_to_id(database, weekday):
+    if weekday in database.weekdays:
+        return database.weekdays[weekday]
+
+    for known_weekday in database.weekdays:
+        if weekday.split('-')[0].lower() in known_weekday.lower():
+            return database.weekdays[weekday]

@@ -9,4 +9,4 @@ Utils auxiliary to the clip module
 
 """
 
-from clip.utils.utils import parse_clean_request, abbr_to_course_iid
+from clip.utils.utils import parse_clean_request, abbr_to_course_iid, weekday_to_id

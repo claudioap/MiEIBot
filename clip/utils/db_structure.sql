@@ -20,7 +20,7 @@ CREATE TABLE "Periods" (
   PRIMARY KEY (`id`)
 );
 
-CREATE TABLE `Teachers` (/* WIP */
+CREATE TABLE `Teachers` (
   `id`   INTEGER,
   `name` INTEGER NOT NULL,
   PRIMARY KEY (`id`)
@@ -41,14 +41,25 @@ CREATE TABLE "Institutions" (
   PRIMARY KEY (`id`)
 );
 
+CREATE TABLE "Buildings" (
+  `id`   INTEGER,
+  `name` INTEGER
+);
+
+CREATE TABLE "Weekdays" (
+  `id`      INTEGER PRIMARY KEY AUTOINCREMENT,
+  `name_en` TEXT,
+  `name_pt` TEXT
+);
+
 /* Dependencies: Institutions */
 CREATE TABLE "Departments" (
-  `id`          INTEGER PRIMARY KEY AUTOINCREMENT,
-  `internal_id` TEXT UNIQUE,
-  `name`        TEXT    NOT NULL,
-  `institution` INTEGER NOT NULL,
-  `creation`    INTEGER,
-  `last_year`   INTEGER
+  `id`           INTEGER PRIMARY KEY AUTOINCREMENT,
+  `internal_id`  TEXT UNIQUE,
+  `name`         TEXT    NOT NULL,
+  `institution`  INTEGER NOT NULL,
+  `initial_year` INTEGER,
+  `last_year`    INTEGER
 );
 
 
@@ -58,6 +69,14 @@ CREATE TABLE "Classes" (
   `name`        TEXT NOT NULL,
   `internal_id` TEXT,
   `department`  INTEGER
+);
+
+/* Dependencies: Departments */
+CREATE TABLE "Classrooms" (
+  `id`       INTEGER,
+  `name`     TEXT    NOT NULL,
+  `building` INTEGER NOT NULL,
+  PRIMARY KEY (`id`)
 );
 
 /* Dependencies: Departments, Degrees*/
@@ -92,7 +111,6 @@ CREATE TABLE "Admissions" (
   `option`     INTEGER,
   `state`      TEXT,
   `check_date` INTEGER,
-  `document`   TEXT,
   `name`       TEXT  /* In case there is no student to assign to*/
 );
 
@@ -105,14 +123,28 @@ CREATE TABLE "ClassInstances" (
   `regent` INTEGER
 );
 
-/* Dependencies: ClassInstances */
+/* Dependencies: ClassInstances, TurnTypes */
 CREATE TABLE "Turns" (
-  `number`         INTEGER,
+  `id`             INTEGER PRIMARY KEY AUTOINCREMENT,
+  `number`         INTEGER NOT NULL,
   `type`           INTEGER NOT NULL,
-  `class_instance` INTEGER,
-  `time`           INTEGER,
-  `weekday`        INTEGER,
-  PRIMARY KEY (`class_instance`, `number`)
+  `class_instance` INTEGER NOT NULL,
+  `hours`          INTEGER,
+  `enrolled`       INTEGER,
+  `capacity`       INTEGER,
+  `routes`         TEXT,
+  `restrictions`   TEXT,
+  `state`          INTEGER
+);
+
+/* Dependencies: Turns, Classrooms */
+CREATE TABLE "TurnInstances" (
+  `turn`      INTEGER,
+  `start`     INTEGER,
+  `end`       INTEGER,
+  `weekday`   INTEGER,
+  `classroom` INTEGER,
+  PRIMARY KEY (`turn`, `weekday`, `start`)
 );
 
 /* Dependencies: Turns, Students */
@@ -136,6 +168,7 @@ CREATE TABLE "Enrollments" (
   `attempt`        INTEGER, /* Attempt that this enrollment constituted */
   `student_year`   INTEGER, /* The year/grade the student was considered to have as of this enrollment */
   `statutes`       TEXT, /* Statutes giving the student benefits on this enrollment */
+  `observation`    TEXT, /* Unparsed information that would get discarded otherwise */
   PRIMARY KEY (`student_id`, `class_instance`)
 );
 
