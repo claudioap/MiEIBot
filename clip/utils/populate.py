@@ -6,7 +6,7 @@ from threading import Lock
 
 from clip import urls, Database, Session
 from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance
-from clip.entities import Institution, Department
+from clip.entities import Institution, Department, Class, ClassInstance
 from clip.utils import parse_clean_request
 
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +28,7 @@ def populate_institutions(session, database):
 
     for institution in institutions:
         hierarchy = parse_clean_request(session.get(urls.INSTITUTION_YEARS.format(institution.identifier)))
-        year_exp = re.compile("\\b\\d{4}\\b")
+        year_exp = re.compile("\b\d{4}\b")
         institution_links = hierarchy.find_all(href=year_exp)
         for institution_link in institution_links:
             year = int(year_exp.findall(institution_link.attrs['href'])[0])
@@ -36,11 +36,12 @@ def populate_institutions(session, database):
 
     for institution in institutions:
         print("Institution found: " + str(institution))
-    database.add_institutions(institutions)
+    # database.add_institutions(institutions)
 
 
 def populate_departments(session, database):
     departments = {}  # internal_id -> Department
+    department_exp = re.compile('\bsector=(\d+)\b')
     for institution in database.institutions.values():
 
         if not institution.has_time_range():  # if it has no time range to iterate through
@@ -50,7 +51,6 @@ def populate_departments(session, database):
         for year in range(institution.initial_year, institution.last_year + 1):
             print("Crawling departments of institution {}. Year:{}".format(institution, year))
             hierarchy = parse_clean_request(session.get(urls.DEPARTMENTS.format(year, institution.identifier)))
-            department_exp = re.compile('\\bsector=(\\d+)\\b')
             department_links = hierarchy.find_all(href=department_exp)
             for department_link in department_links:
                 department_id = department_exp.findall(department_link.attrs['href'])[0]
@@ -75,53 +75,47 @@ def populate_departments(session, database):
 
 def populate_classes(session, database):  # TODO threading
 
-    for department, department_info in database.departments.items():  # for every department
-        classes = {}
-        class_instances = {}
+    period_exp = re.compile('&tipo_de_per%EDodo_lectivo=(?P<type>\w)&per%EDodo_lectivo=(?P<stage>\d)$')
+    class_exp = re.compile('&unidade_curricular=(\d+)')
+
+    for department in database.departments.values():  # for every department
+        class_db_ids = {}
+        class_instances = []
 
         # for each year this department operated
-        for year in range(department_info['initial_year'], department_info['final_year'] + 1):
+        for year in range(department.initial_year, department.last_year + 1):
             hierarchy = parse_clean_request(session.get(
-                urls.CLASSES.format(department_info['institution'], year, department)))
+                urls.CLASSES.format(department.institution, year, department.identifier)))
 
-            period_links = hierarchy.find_all(href=re.compile("\\bper%EDodo_lectivo=\\d\\b"))
+            period_links = hierarchy.find_all(href=period_exp)
 
             # for each period this department teaches
             for period_link in period_links:
-                parts = period_link.attrs['href'].split('&')
-                stage = parts[-1].split('=')[1]
-                period_letter = parts[-2].split('=')[1]
+                match = period_exp.search(period_link.attrs['href'])
+                period_type = match.group("type")
+                stage = int(match.group("stage"))
 
-                if period_letter not in database.periods:
+                if period_type not in database.periods:
                     raise Exception("Unknown period")  # TODO improve
 
-                period_id = database.periods[period_letter][stage]
-                hierarchy = parse_clean_request(session.get(
-                    urls.CLASSES_PERIOD.format(
-                        period_letter, department, year, stage, department_info['institution'])))
+                period_id = database.periods[period_type][stage]
+                hierarchy = parse_clean_request(session.get(urls.CLASSES_PERIOD.format(
+                    period_type, department.identifier, year, stage, department.institution)))
 
-                class_links = hierarchy.find_all(href=re.compile("\\bunidade_curricular=\\b"))
+                class_links = hierarchy.find_all(href=class_exp)
 
                 # for each class in this period
                 for class_link in class_links:
-                    class_iid = class_link.attrs['href'].split('&')[-1].split('=')[1]
+                    class_id = class_exp.findall(class_link.attrs['href'])[0]
                     class_name = class_link.contents[0]
-                    print("Found {}({})".format(class_name, class_iid))
-                    if class_iid not in classes:
-                        classes[class_iid] = {
-                            'id': None,
-                            'name': class_name,
-                            'department': department
-                        }
+                    if class_id not in class_db_ids:
+                        class_db_ids[class_id] = database.add_class(Class(class_id, class_name, department.identifier))
 
-                    if class_iid not in class_instances:
-                        class_instances[class_iid] = []
+                    class_instances.append(
+                        ClassInstance(class_id, period_id, year, class_db_id=class_db_ids[class_id]))
 
-                    class_instances[class_iid].append({
-                        'period': period_id,
-                        'year': year
-                    })
-        database.add_classes(classes)
+            database.commit()
+        print("Adding class instances of department {} to the database.".format(department))
         database.add_class_instances(class_instances)
 
 

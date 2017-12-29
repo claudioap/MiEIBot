@@ -40,7 +40,6 @@ class TemporalEntity(AbstractEntity):
 class Institution(TemporalEntity):
     def __init__(self, identifier, abbreviation, initial_year=None, last_year=None, name=None, db_id=None):
         super().__init__(identifier, initial_year=initial_year, last_year=last_year, db_id=db_id)
-        self.identifier = identifier
         self.abbreviation = abbreviation
         self.name = name if name is not None else abbreviation
         self.db_id = db_id
@@ -54,7 +53,6 @@ class Institution(TemporalEntity):
 class Department(TemporalEntity):
     def __init__(self, identifier, name, institution, initial_year=None, last_year=None, db_id=None):
         super().__init__(identifier, last_year=last_year, db_id=db_id)
-        self.identifier = identifier
         self.name = name
         self.institution = institution
         self.initial_year = initial_year
@@ -65,3 +63,26 @@ class Department(TemporalEntity):
         return ("{}(id:{}, inst:{}, db:{})".format(
             self.name, self.identifier, self.institution, self.db_id)
                 + super().__str__())
+
+
+class Class(AbstractEntity):
+    def __init__(self, identifier, name, department, db_id=None):
+        super().__init__(identifier, db_id=db_id)
+        self.name = name
+        self.department = department
+        self.db_id = db_id
+
+    def __str__(self):
+        return ("{}(id:{}, dept:{}, db:{})".format(
+            self.name, self.identifier, self.department, self.db_id))
+
+
+class ClassInstance:
+    def __init__(self, class_id, period, year, class_db_id=None):
+        self.class_id = class_id
+        self.period = period
+        self.year = year
+        self.class_db_id = class_db_id
+
+    def __str__(self):
+        return "{} on period {} of {}".format(self.class_id, self.period, self.year)

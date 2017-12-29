@@ -75,7 +75,7 @@ class Database:
         self.cursor.execute('SELECT type_letter, stage, id '
                             'FROM Periods')
         for period in self.cursor:
-            if period[0] not in self.periods:  # unseen letter
+            if period[0] not in periods:  # unseen letter
                 periods[period[0]] = {}
 
             periods[period[0]][period[1]] = period[2]
@@ -240,108 +240,121 @@ class Database:
         print("Departments added successfully!")
         self.__load_departments__()
 
-    def add_classes(self, classes):
-        departments = {}  # cache
-        for class_iid, class_info in classes.items():
-            department_iid = class_info['department']
-            if department_iid not in departments:
-                departments[class_info['institution']] = self.departments[department_iid].identifier
-            department_id = departments[department_iid]
+    def add_class(self, class_, commit=False):
+        if class_.department not in self.departments:
+            raise Exception("Unknown department")
 
-            if class_iid not in self.class_department_cache:  # cache this department TODO useful?
-                self.class_department_cache[class_iid] = department_id
+        department = self.departments[class_.department]
 
-            exists = False
-
-            self.lock.acquire()
-            try:
-                self.cursor.execute('SELECT name '
-                                    'FROM Classes '
-                                    'WHERE internal_id=? AND department=?',
-                                    (class_iid, department_id))
-                classes = self.cursor.fetchall()
-            finally:
-                self.lock.release()
-
-            for class_ in classes:
-                if class_[0] != class_info['name']:
-                    raise Exception("Different classes had an iid collision {} with {}, iid was {}".format(
-                        class_info['name'], class_[0], class_iid
-                    ))
-                else:
-                    print("Class already known: {}({})".format(class_info['name'], class_iid))  # TODO Proper logging
-                    exists = True
-
-            if not exists:
-                self.lock.acquire()
-                try:
-                    print("Adding  {}({}) to the database".format(class_info['name'], class_iid))
-                    self.cursor.execute('INSERT INTO Classes(internal_id, name, department) VALUES (?, ?, ?)',
-                                        (class_iid, class_info['name'], class_info['department']))
-                finally:
-                    self.lock.release()
+        exists = False
+        class_db_id = None
 
         self.lock.acquire()
         try:
-            self.link.commit()
-            print("Changes saved")
+            self.cursor.execute('SELECT id, name '
+                                'FROM Classes '
+                                'WHERE internal_id=? AND department=?',
+                                (class_.identifier, department.db_id))
+            stored_classes = self.cursor.fetchall()
         finally:
             self.lock.release()
+
+        for stored_class in stored_classes:
+            stored_class_name = stored_class[1]
+            if stored_class_name != class_.name:
+                raise Exception("Id collision or class name change attempt. {} to {} (id was {})".format(
+                    stored_class_name, class_.name, class_.identifier
+                ))
+            else:
+                print("Already known: {}".format(class_))  # TODO Proper logging
+                exists = True
+                class_db_id = stored_class[0]
+
+        if not exists:
+            self.lock.acquire()
+            try:
+                print("Adding class {}".format(class_))
+                self.cursor.execute('INSERT INTO Classes(internal_id, name, department) '
+                                    'VALUES (?, ?, ?)',
+                                    (class_.identifier, class_.name, department.db_id))
+
+                # fetch the new id
+                self.cursor.execute('SELECT id '
+                                    'FROM Classes '
+                                    'WHERE internal_id=? AND department=?',
+                                    (class_.identifier, department.db_id))
+
+                if commit:
+                    self.link.commit()
+
+                return self.cursor.fetchone()[0]
+            finally:
+                self.lock.release()
+
+        if commit:
+            self.lock.acquire()
+            try:
+                self.link.commit()
+            finally:
+                self.lock.release()
+
+        return class_db_id
 
     def add_class_instances(self, instances):  # instances: [class_iid] ->[{year, period}, ...]
 
         # add class instance to the database
-        for class_iid, instance_info in instances.items():
-            # figure out if the class id is unknown
+        for instance in instances:
+            if instance.class_db_id is None:
+                # figure out if the class id is cached
+                if instance.class_id not in self.class_id_cache:  # fetch it
+                    self.lock.acquire()
+                    try:
+                        self.cursor.execute('SELECT id '
+                                            'FROM Classes '
+                                            'WHERE internal_id=?',
+                                            (instance.class_id,))
+                        result = self.cursor.fetchone()
+                    finally:
+                        self.lock.release()
 
-            if class_iid not in self.class_id_cache:  # fetch it
-                self.lock.acquire()
-                try:
-                    self.cursor.execute('SELECT id '
-                                        'FROM Classes '
-                                        'WHERE internal_id=?',
-                                        (class_iid,))
-                    result = self.cursor.fetchone()
-                finally:
-                    self.lock.release()
+                    if result is None:
+                        raise Exception("Unable to find the parent class of the instance {}".format(instance))
 
-                if result is None:
-                    raise Exception("Unknown class id for {}, info: {}".format(class_iid, instances))
+                    self.class_id_cache[instance.class_id] = result[0]
 
-                self.class_id_cache[class_iid] = result[0]
+                class_db_id = self.class_id_cache[instance.class_id]  # obtain the class id from the cache
+            else:
+                class_db_id = instance.class_db_id
 
-            # obtain the class id from the cache
-            class_id = self.class_id_cache[class_iid]
             self.lock.acquire()
             try:
-                for instance in instance_info:
-                    self.cursor.execute('SELECT period, year '
-                                        'FROM ClassInstances '
-                                        'WHERE class=?',
-                                        (class_id,))
+                self.cursor.execute('SELECT period, year '
+                                    'FROM ClassInstances '
+                                    'WHERE class=?',
+                                    (class_db_id,))
 
-                    exists = False
+                exists = False
 
-                    for row in self.cursor.fetchall():  # for every class matching the iid
-                        if row[0] == instance['period'] and row[1] == instance['year']:
-                            exists = True
-                            break
+                for stored_instance in self.cursor.fetchall():  # for every instance matching this instance parent class
+                    if stored_instance[0] == instance.period and stored_instance[1] == instance.year:
+                        exists = True
+                        break
 
-                    if not exists:  # unknown class instance, add it to the DB
-                        print("Adding class iid {} instance in period {} of {} to the database".format(  # TODO logging
-                            class_iid, instance['period'], instance['year']))
-                        self.cursor.execute('INSERT INTO ClassInstances(class, period, year) '
-                                            'VALUES (?, ?, ?)',
-                                            (class_id, instance['period'], instance['year']))
+                if not exists:  # unknown class instance, add it to the DB
+                    print("Adding instance of {}".format(instance))
+                    self.cursor.execute('INSERT INTO ClassInstances(class, period, year) '
+                                        'VALUES (?, ?, ?)',
+                                        (class_db_id, instance.period, instance.year))
             finally:
                 self.lock.release()
 
-        self.lock.aquire()
+        self.lock.acquire()
         try:
             self.link.commit()
-            print("Changes saved")
         finally:
             self.lock.release()
+
+        print("Class instances added successfully!")
 
     def add_courses(self, courses):
         for course_iid, course_info in courses.items():
@@ -389,7 +402,7 @@ class Database:
                     course_info['abbreviation'],
                     course_info['initial_year'],
                     course_info['final_year']))
-                self.lock.aquire()
+                self.lock.acquire()
                 try:
                     self.cursor.execute(
                         'INSERT INTO Courses'
@@ -409,7 +422,7 @@ class Database:
                 if course_info['initial_year'] is not None and course_info['final_year'] is not None:
                     print("Updating course {}({}) (now goes from {} to {})".format(
                         course_info['name'], course_iid, course_info['initial_year'], course_info['final_year']))
-                    self.lock.aquire()
+                    self.lock.acquire()
                     try:
                         self.cursor.execute(
                             'UPDATE Courses '
@@ -426,7 +439,7 @@ class Database:
                 if course_info['abbreviation'] is not None:
                     print("Updating course {}({}) abbreviation to {}".format(
                         course_info['name'], course_iid, course_info['abbreviation']))
-                    self.lock.aquire()
+                    self.lock.acquire()
                     try:
                         self.cursor.execute(
                             'UPDATE Courses '
@@ -441,7 +454,7 @@ class Database:
                 if course_info['degree'] is not None:
                     print("Updating course {}({}) degree to {}".format(
                         course_info['name'], course_iid, course_info['degree']))
-                    self.lock.aquire()
+                    self.lock.aqcuire()
                     try:
                         self.cursor.execute(
                             'UPDATE Courses '
@@ -452,7 +465,7 @@ class Database:
                     finally:
                         self.lock.release()
 
-        self.lock.aquire()
+        self.lock.acquire()
         try:
             self.link.commit()
             print("Changes saved")
@@ -653,7 +666,7 @@ class Database:
 
         return turn_id
 
-    # Reconstructs a turn instances, IT'S DESTRUCTIVE!
+    # Reconstructs the instances of a turn , IT'S DESTRUCTIVE!
     def add_turn_instances(self, turn_id, instances):
         self.lock.acquire()
         try:
@@ -760,7 +773,7 @@ class Database:
         return class_instances
 
     def commit(self):
-        self.lock.aquire()
+        self.lock.acquire()
         try:
             self.link.commit()
         finally:
