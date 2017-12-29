@@ -34,11 +34,12 @@ CREATE TABLE "TurnTypes" (
 );
 
 CREATE TABLE "Institutions" (
-  `id`          INTEGER,
-  `internal_id` TEXT,
-  `short_name`  TEXT NOT NULL,
-  `full_name`   TEXT,
-  PRIMARY KEY (`id`)
+  id           INTEGER PRIMARY KEY,
+  internal_id  TEXT,
+  abbreviation TEXT NOT NULL,
+  name         TEXT,
+  initial_year INTEGER,
+  last_year    INTEGER
 );
 
 CREATE TABLE "Buildings" (
@@ -175,15 +176,15 @@ CREATE TABLE "Enrollments" (
 
 CREATE VIEW 'ClassesComplete' AS
   SELECT
-    Periods.stage            AS 'period',
-    Periods.stages           AS 'total_periods',
-    ClassInstances.year      AS 'year',
-    Classes.internal_id      AS 'class_iid',
-    Classes.name             AS 'class_name',
-    Departments.internal_id  AS 'dept_iid',
-    Departments.name         AS 'dept_name',
-    Institutions.internal_id AS 'inst_iid',
-    Institutions.short_name  AS 'inst_name'
+    Periods.stage             AS 'period',
+    Periods.stages            AS 'total_periods',
+    ClassInstances.year       AS 'year',
+    Classes.internal_id       AS 'class_iid',
+    Classes.name              AS 'class_name',
+    Departments.internal_id   AS 'dept_iid',
+    Departments.name          AS 'dept_name',
+    Institutions.internal_id  AS 'inst_iid',
+    Institutions.abbreviation AS 'inst_name'
   FROM ClassInstances
     JOIN Periods ON Periods.id = ClassInstances.period
     JOIN Classes ON ClassInstances.class = Classes.id

@@ -5,6 +5,8 @@ import re
 from datetime import datetime
 from queue import Queue
 
+from clip.entities import Institution, Department
+
 
 def escape(string):
     return str(re.sub(re.compile("[^\w\d\s.-]", re.UNICODE), "", string))
@@ -17,10 +19,10 @@ class Database:
         self.lock = threading.Lock()
 
         # full caches
-        self.institutions = {}  # [internal_id] -> {id, name}
-        self.degrees = {}  # [internal_id] -> {id, name}
+        self.institutions = {}  # [clip_id] -> Institution
+        self.departments = {}  # [clip_id] -> Department
+        self.degrees = {}  # [clip_id] -> {id, name}
         self.periods = {}  # [letter][stage] -> db id
-        self.departments = {}  # [internal_id] -> {id, name, initial_year, last_year}
         self.courses = {}  # [internal_id] -> {id, start, end}
         self.course_abbreviations = {}  # [abbr] -> [internal_ids, ...]
         self.weekdays = {}  # [portuguese_name] -> internal_id
@@ -47,14 +49,12 @@ class Database:
     def __load_institutions__(self):  # build institution cache
         institutions = {}
         self.lock.acquire()
-        self.cursor.execute('SELECT internal_id, id, short_name, initial_year, last_year '
+        self.cursor.execute('SELECT internal_id, id, abbreviation, name, initial_year, last_year '
                             'FROM Institutions')
         for institution in self.cursor:
-            institutions[institution[0]] = {
-                'id': institution[1],
-                'name': institution[2],
-                'initial_year': institution[3],
-                'last_year': institution[4]}
+            institutions[institution[0]] = Institution(
+                institution[0], institution[2], name=institution[3],
+                initial_year=institution[4], last_year=institution[5], db_id=institution[1])
         self.lock.release()
         self.institutions = institutions
 
@@ -78,10 +78,7 @@ class Database:
             if period[0] not in self.periods:  # unseen letter
                 periods[period[0]] = {}
 
-            if period[1] not in self.periods[period[0]]:  # unseen stage
-                periods[period[1]] = {}
-
-            periods[period[1]][period[0]] = period[2]
+            periods[period[0]][period[1]] = period[2]
         self.lock.release()
         self.periods = periods
 
@@ -93,12 +90,10 @@ class Database:
                             'FROM Departments '
                             'JOIN Institutions ON Departments.institution = Institutions.id')
         for department in self.cursor:
-            departments[department[0]] = {
-                'id': department[1],
-                'name': department[2],
-                'initial_year': department[3],
-                'last_year': department[4],
-                'institution': department[5]}
+            departments[department[0]] = Department(
+                department[0], department[2], department[5],
+                initial_year=department[3], last_year=department[4], db_id=department[1])
+
         self.lock.release()
         self.departments = departments
 
@@ -152,74 +147,97 @@ class Database:
         self.lock.release()
         self.teachers = teachers
 
-    def add_departments(self, departments):
-        institutions = {}  # cache
-        for department_iid, department_info in departments.items():
-            institution_iid = department_info['institution']
-            if institution_iid not in institutions:
-                institutions[department_info['institution']] = self.institutions[institution_iid]['id']
-            institution_id = institutions[institution_iid]
+    def add_institutions(self, institutions):
+        self.lock.acquire()
+        try:
+            for institution in institutions:
+                if institution.identifier not in self.institutions:
+                    self.cursor.execute(
+                        'INSERT INTO Institutions(internal_id, abbreviation, name, initial_year, last_year) '
+                        'VALUES (?, ?, ?, ?, ?)',
+                        (institution.identifier, institution.abbreviation,
+                         institution.name if institution.name != institution.abbreviation else None,
+                         institution.initial_year, institution.last_year))
 
+                else:
+                    self.cursor.execute(
+                        'SELECT name, last_year '
+                        'FROM Institutions '
+                        'WHERE internal_id =? AND abbreviation=?',
+                        (institution.identifier, institution.abbreviation))
+                    stored = self.cursor.fetchone()
+
+                    # new name (could be previously unknown)
+                    if institution.name is not None and institution.name != institution.abbreviation \
+                            and institution.name != stored[0]:
+                        self.cursor.execute(
+                            'UPDATE Institutions '
+                            'SET name=? '
+                            'WHERE internal_id =? AND abbreviation=?',
+                            (institution.name, institution.identifier, institution.abbreviation))
+
+                    # new last year (new academic year)
+                    if institution.last_year is not None and institution.last_year != stored[1]:
+                        self.cursor.execute(
+                            'UPDATE Institutions '
+                            'SET last_year=? '
+                            'WHERE internal_id =? AND abbreviation=?',
+                            (institution.last_year, institution.identifier, institution.abbreviation))
+            self.link.commit()
+        finally:
+            self.lock.release()
+        print("Institutions added successfully!")
+        self.__load_institutions__()
+
+    def add_departments(self, departments):
+        for department in departments:
             exists = False
             different = False
 
-            self.lock.acquire()
-            try:
-                self.cursor.execute('SELECT name, initial_year, last_year '
-                                    'FROM Departments '
-                                    'WHERE institution=? AND internal_id=?',
-                                    (institution_id, department_iid))
-                for department in self.cursor.fetchall():
-                    if department[0] != department_info['name']:
-                        raise Exception("Different departments had an iid collision, {}. ({} != {})".format(
-                            department_iid, department[0], department_info['name']
-                        ))
+            if department.identifier in self.departments:
+                stored_department = self.departments[department.identifier]
+                exists = True
+                if stored_department.name != department.name:
+                    raise Exception("Different departments had an id collision:\n\tStored: {}\n\tNew: {}".format(
+                        stored_department, departments))
 
-                    # creation date different or  last year different
-                    elif department[1] != department_info['initial_year'] \
-                            or department[2] != department_info['last_year']:
-                        different = True
-                        exists = True
+                # creation date different or  last year different
+                if department.initial_year != stored_department.initial_year \
+                        or department.last_year != stored_department.last_year:
+                    different = True
 
-                if not exists:  # unknown department, add it to the DB
-                    print("Adding department '{}'({}) {} - {} to the database".format(
-                        department_info['name'],
-                        department_iid,
-                        department_info['initial_year'],
-                        department_info['last_year']))
+            if not exists:  # unknown department, add it to the DB
+                print("Adding department {}".format(department))
+                self.lock.acquire()
+                try:
                     self.cursor.execute(
                         'INSERT INTO Departments(internal_id, name, initial_year, last_year, institution) '
                         'VALUES (?, ?, ?, ?, ?)',
-                        (department_iid,
-                         department_info['name'],
-                         department_info['initial_year'],
-                         department_info['last_year'],
-                         institution_id))
+                        (department.identifier, department.name, department.initial_year, department.last_year,
+                         self.institutions[department.institution].db_id))
+                finally:
+                    self.lock.release()
 
-                if different:  # department changed
-                    print("Updating department '{}'() (now goes from {} to {})".format(
-                        department_info['name'],
-                        department_iid,
-                        department_info['creation'],
-                        department_info['last_year']))
+            if different:  # department changed
+                print("Updating department from:'{}' to:'{}'".format(stored_department, department))
+                self.lock.acquire()
+                try:
                     self.cursor.execute(
                         'UPDATE Departments '
                         'SET initial_year=?, last_year=? '
                         'WHERE internal_id=? AND institution=?',
-                        (department_info['creation'],
-                         department_info['last_year'],
-                         department_iid,
-                         institution_id))
-            finally:
-                self.lock.release()
+                        (department.initial_year, department.last_year, department.identifier,
+                         self.institutions[department.institution].db_id))
+                finally:
+                    self.lock.release()
 
         self.lock.acquire()
         try:
             self.link.commit()
-            print("Changes saved")
         finally:
             self.lock.release()
 
+        print("Departments added successfully!")
         self.__load_departments__()
 
     def add_classes(self, classes):
@@ -227,7 +245,7 @@ class Database:
         for class_iid, class_info in classes.items():
             department_iid = class_info['department']
             if department_iid not in departments:
-                departments[class_info['institution']] = self.departments[department_iid]['id']
+                departments[class_info['institution']] = self.departments[department_iid].identifier
             department_id = departments[department_iid]
 
             if class_iid not in self.class_department_cache:  # cache this department TODO useful?
@@ -383,7 +401,7 @@ class Database:
                          course_info['final_year'],
                          course_info['abbreviation'],
                          course_info['degree'],
-                         self.institutions[course_info['institution']]['id']))
+                         self.institutions[course_info['institution']].identifier))
                 finally:
                     self.lock.release()
 
@@ -400,7 +418,7 @@ class Database:
                             (course_info['initial_year'],
                              course_info['final_year'],
                              course_iid,
-                             self.institutions[course_info['institution']]['id']))
+                             self.institutions[course_info['institution']].identifier))
                     finally:
                         self.lock.release()
 
@@ -415,7 +433,7 @@ class Database:
                             'SET abbreviation=? '
                             'WHERE internal_id=? AND institution=?',
                             (course_info['abbreviation'],
-                             course_iid, self.institutions[course_info['institution']]['id']))
+                             course_iid, self.institutions[course_info['institution']].identifier))
                     finally:
                         self.lock.release()
 
@@ -430,7 +448,7 @@ class Database:
                             'SET degree=? '
                             'WHERE internal_id=? AND institution=?',
                             (course_info['degree'], course_iid,
-                             self.institutions[course_info['institution']]['id']))
+                             self.institutions[course_info['institution']].identifier))
                     finally:
                         self.lock.release()
 
@@ -445,7 +463,7 @@ class Database:
     # adds/updates the student information. Returns student id. DOES NOT COMMIT BY DEFAULT
     def add_student(self, student_iid, name, course=None, abbr=None, institution=None, commit=False):
         course_id = None if course is None else self.courses[course]['id']
-        institution_id = None if institution is None else self.institutions[institution]['id']
+        institution_id = None if institution is None else self.institutions[institution].identifier
         abbr = abbr if abbr != '' else None
 
         if name is None or name == '':

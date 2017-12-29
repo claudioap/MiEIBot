@@ -1,4 +1,5 @@
 ROOT = 'https://clip.unl.pt'
+INSTITUTIONS = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica"
 INSTITUTION_YEARS = 'https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo?institui%E7%E3o={}'
 DEPARTMENTS = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo?ano_lectivo={}&institui%E7%E3o={}"
 CLASSES = "https://clip.unl.pt/utente/institui%E7%E3o_sede/unidade_organica/ensino/ano_lectivo/sector?institui%E7%E3o={}&ano_lectivo={}&sector={}"
