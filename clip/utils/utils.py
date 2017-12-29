@@ -28,14 +28,14 @@ def abbr_to_course_iid(database, abbr, year=None):
     if len(matches) == 0:
         return None
     elif len(matches) == 1:
-        return matches[0]['id']
+        return matches[0].identifier
     else:
         if year is None:
             raise Exception("Multiple matches. Year unspecified")
 
         for match in matches:
-            if match['start'] <= year <= match['end']:
-                return match['id']
+            if match.initial_year <= year <= match.last_year:
+                return match.identifier
 
 
 def weekday_to_id(database, weekday):

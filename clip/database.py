@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from queue import Queue
 
-from clip.entities import Institution, Department
+from clip.entities import Institution, Department, Course
 
 
 def escape(string):
@@ -23,7 +23,7 @@ class Database:
         self.departments = {}  # [clip_id] -> Department
         self.degrees = {}  # [clip_id] -> {id, name}
         self.periods = {}  # [letter][stage] -> db id
-        self.courses = {}  # [internal_id] -> {id, start, end}
+        self.courses = {}  # [internal_id] -> Course
         self.course_abbreviations = {}  # [abbr] -> [internal_ids, ...]
         self.weekdays = {}  # [portuguese_name] -> internal_id
         self.turn_types = {}  # [abbr] -> db_id
@@ -102,19 +102,17 @@ class Database:
         self.course_abbreviations.clear()
 
         self.lock.acquire()
-        self.cursor.execute('SELECT internal_id, abbreviation, id, initial_year, final_year '
+        self.cursor.execute('SELECT internal_id, name, abbreviation, id, initial_year, last_year, degree, institution '
                             'FROM Courses '
                             'WHERE abbreviation IS NOT NULL')
         for course in self.cursor:
-            self.courses[course[0]] = {
-                'id': course[2],
-                'start': course[3],
-                'end': course[4]
-            }
+            course_obj = Course(course[0], course[1], course[2], course[6], course[7],
+                                initial_year=course[4], last_year=course[5], db_id=course[3])
+            self.courses[course[0]] = course_obj
 
-            if course[1] not in self.course_abbreviations:
-                self.course_abbreviations[course[1]] = []
-            self.course_abbreviations[course[1]].append(course[0])
+            if course[2] not in self.course_abbreviations:
+                self.course_abbreviations[course[2]] = []
+            self.course_abbreviations[course[2]].append(course_obj)
         self.lock.release()
 
     def __load_weekdays__(self):  # build course abbr cache
@@ -357,7 +355,7 @@ class Database:
         print("Class instances added successfully!")
 
     def add_courses(self, courses):
-        for course_iid, course_info in courses.items():
+        for course in courses:
             exists = False
             different_time = False
             different_abbreviation = False
@@ -365,117 +363,105 @@ class Database:
 
             self.lock.acquire()
             try:
-                self.cursor.execute('SELECT name, initial_year, final_year, abbreviation, degree '
+                self.cursor.execute('SELECT name, initial_year, last_year, abbreviation, degree '
                                     'FROM Courses '
                                     'WHERE institution=? AND internal_id=?',
-                                    (course_info['institution']['id'], course_iid))
-                courses = self.cursor.fetchall()
+                                    (self.institutions[course.institution].db_id, course.identifier))
+                stored_courses = self.cursor.fetchall()
             finally:
                 self.lock.release()
 
-            for course in courses:
-                course_name = course[0]
-                course_initial_year = course[1]
-                course_final_year = course[2]
-                course_abbreviation = course[3]
-                course_degree = course[4]
+            for stored_course in stored_courses:
+                stored_course_name = course[0]
+                stored_course_initial_year = course[1]
+                stored_course_last_year = course[2]
+                stored_course_abbreviation = course[3]
+                stored_course_degree = course[4]
 
-                if course_name != course_info['name']:
-                    raise Exception("Different courses had an id collision")
+                if course.name != stored_course_name:
+                    raise Exception("Different courses had an id collision {} with {}".format(courses, stored_course))
 
                 exists = True
 
                 # course information changed (or previously unknown information appeared)
-                if course_initial_year != course_info['initial_year'] or course_final_year != course_info['final_year']:
+                if stored_course_initial_year != course.initial_year or stored_course_last_year != course.last_year:
                     different_time = True
 
-                if course_abbreviation != course_info['abbreviation']:
+                if stored_course_abbreviation != course.abbreviation:
                     different_abbreviation = True
 
-                if course_degree != course_info['degree']:
+                if stored_course_degree != course.degree:
                     different_degree = True
 
             if not exists:  # unknown department, add it to the DB
-                print("Adding  {}({}, {}) {} - {} to the database".format(
-                    course_info['name'],
-                    course_iid,
-                    course_info['abbreviation'],
-                    course_info['initial_year'],
-                    course_info['final_year']))
+                print("Adding course: {}".format(course))
                 self.lock.acquire()
                 try:
                     self.cursor.execute(
                         'INSERT INTO Courses'
-                        '(internal_id, name, initial_year, final_year, abbreviation, degree, institution) '
+                        '(internal_id, name, initial_year, last_year, abbreviation, degree, institution) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (course_iid,
-                         course_info['name'],
-                         course_info['initial_year'],
-                         course_info['final_year'],
-                         course_info['abbreviation'],
-                         course_info['degree'],
-                         self.institutions[course_info['institution']].identifier))
+                        (course.identifier, course.name, course.initial_year, course.last_year,
+                         course.abbreviation, course.degree, self.institutions[course.institution].identifier))
                 finally:
                     self.lock.release()
 
             if different_time:  # update running date
-                if course_info['initial_year'] is not None and course_info['final_year'] is not None:
+                if course.initial_year is not None and course.last_year is not None:
                     print("Updating course {}({}) (now goes from {} to {})".format(
-                        course_info['name'], course_iid, course_info['initial_year'], course_info['final_year']))
+                        course.name, course.identifier, course.initial_year, course.last_year))
                     self.lock.acquire()
                     try:
                         self.cursor.execute(
                             'UPDATE Courses '
-                            'SET initial_year = ?, final_year=? '
+                            'SET initial_year = ?, last_year=? '
                             'WHERE internal_id=? AND institution=?',
-                            (course_info['initial_year'],
-                             course_info['final_year'],
-                             course_iid,
-                             self.institutions[course_info['institution']].identifier))
+                            (course.initial_year,
+                             course.last_year,
+                             course.identifier,
+                             self.institutions[course.institution].identifier))
                     finally:
                         self.lock.release()
 
             if different_abbreviation:  # update abbreviation
-                if course_info['abbreviation'] is not None:
+                if course.abbreviation is not None:
                     print("Updating course {}({}) abbreviation to {}".format(
-                        course_info['name'], course_iid, course_info['abbreviation']))
+                        course.name, course.identifier, course.abbreviation))
                     self.lock.acquire()
                     try:
                         self.cursor.execute(
                             'UPDATE Courses '
                             'SET abbreviation=? '
                             'WHERE internal_id=? AND institution=?',
-                            (course_info['abbreviation'],
-                             course_iid, self.institutions[course_info['institution']].identifier))
+                            (course.abbreviation, course.identifier, self.institutions[course.institution].identifier))
                     finally:
                         self.lock.release()
 
             if different_degree:  # update degree
-                if course_info['degree'] is not None:
+                if course.degree is not None:
                     print("Updating course {}({}) degree to {}".format(
-                        course_info['name'], course_iid, course_info['degree']))
+                        course.name, course.identifier, course.degree))
                     self.lock.aqcuire()
                     try:
                         self.cursor.execute(
                             'UPDATE Courses '
                             'SET degree=? '
                             'WHERE internal_id=? AND institution=?',
-                            (course_info['degree'], course_iid,
-                             self.institutions[course_info['institution']].identifier))
+                            (course.degree, course.identifier, self.institutions[course.institution].identifier))
                     finally:
                         self.lock.release()
 
         self.lock.acquire()
         try:
             self.link.commit()
-            print("Changes saved")
+            print("Courses added successfully!")
         finally:
             self.lock.release()
         self.__load_courses__()
 
     # adds/updates the student information. Returns student id. DOES NOT COMMIT BY DEFAULT
     def add_student(self, student_iid, name, course=None, abbr=None, institution=None, commit=False):
-        course_id = None if course is None else self.courses[course]['id']
+        course_id = None if course is None else self.courses[course].identifier
         institution_id = None if institution is None else self.institutions[institution].identifier
         abbr = abbr if abbr != '' else None
 
@@ -504,12 +490,8 @@ class Database:
             try:
                 self.cursor.execute('INSERT INTO STUDENTS(name, internal_id, abbreviation, course, institution) '
                                     'VALUES (?, ?, ?, ?, ?)',
-                                    (name,
-                                     student_iid,
-                                     abbr,
-                                     course,
-                                     institution_id))
-                print("New student saved")  # TODO proper logging
+                                    (name, student_iid, abbr, course, institution_id))
+                print("New student saved {}({}-{})".format(name, student_iid, abbr))  # TODO proper logging
             finally:
                 self.lock.release()
         elif len(matching_students) == 1:
@@ -538,7 +520,7 @@ class Database:
                                         "SET abbreviation=?, institution=?, course=? "
                                         "WHERE id=?",
                                         (new_abbr, new_institution, new_course, stored_id))
-                    print("Updated student info")  # TODO proper logging
+                    print("Updated student info {}({}-{})".format(name, student_iid, abbr))  # TODO proper logging
                     if commit:
                         self.link.commit()
                 finally:
@@ -709,16 +691,10 @@ class Database:
             try:
                 self.cursor.execute(
                     'INSERT INTO Admissions '
-                    '(student_id, course_id, phase, year, option, state, check_date, name) '
+                    '(student, name, course, phase, year, option, state, check_date) '
                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                    (admission['student_id'],
-                     admission['course'],
-                     admission['phase'],
-                     admission['year'],
-                     admission['option'],
-                     admission['state'],
-                     datetime.now(),
-                     admission['name'] if admission['student'] is None else None))
+                    (admission.student_id, self.courses[admission.course].db_id, admission.phase, admission.year,
+                     admission.option, admission.state, admission.check_date, admission.name))
                 self.link.commit()
             finally:
                 self.lock.release()

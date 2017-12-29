@@ -1,21 +1,17 @@
 import logging
 import re
-from datetime import datetime
 from queue import Queue
 from time import sleep
 from threading import Lock
 
 from clip import urls
 from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance, crawl_classes
-from clip.entities import Institution, Department
+from clip.entities import Institution, Department, Admission, Course
 from clip.utils import parse_clean_request
 
 logging.basicConfig(level=logging.INFO)
 THREADS = 8
 
-
-# TODO port dictionaries to classes
-# TODO wombo-split-strip-combo to regexes
 
 def populate_institutions(session, database):
     institutions = []
@@ -110,65 +106,58 @@ def populate_classes(session, database):
 
 
 def populate_courses(session, database):
+    course_exp = re.compile("\\bcurso=(\d+)\\b")
+    year_ext = re.compile("\\bano_lectivo=(\d+)\\b")
     for institution in database.institutions:
         courses = {}
         hierarchy = parse_clean_request(session.get(urls.COURSES.format(institution)))
-        course_exp = re.compile("\\bcurso=\\d+\\b")
         course_links = hierarchy.find_all(href=course_exp)
         for course_link in course_links:  # for every course link in the courses list page
-            course_iid = course_exp.findall(course_link.attrs['href'])[0].split('=')[-1]
-            courses[course_iid] = {
-                'name': course_link.contents[0].text.strip(),
-                'initial_year': None,
-                'final_year': None,
-                'abbreviation': None,
-                'degree': None,
-                'institution': institution
-            }
+            course_id = course_exp.findall(course_link.attrs['href'])[0]
+            courses[course_id] = Course(
+                course_id, course_link.contents[0].text.strip(),
+                None, None, database.institutions[institution].identifier)
 
             # fetch the course curricular plan to find the activity years
-            hierarchy = parse_clean_request(session.get(urls.CURRICULAR_PLANS.format(institution, course_iid)))
-            year_links = hierarchy.find_all(href=re.compile("\\bano_lectivo=\\d+\\b"))
+            hierarchy = parse_clean_request(session.get(urls.CURRICULAR_PLANS.format(institution, course_id)))
+            year_links = hierarchy.find_all(href=year_ext)
             # find the extremes
             for year_link in year_links:
-                year = int(year_link.attrs['href'].replace('\n', ' ').split('=')[-1])
-                if courses[course_iid]['initial_year'] is None:
-                    courses[course_iid]['initial_year'] = year
-                    courses[course_iid]['final_year'] = year
-                elif courses[course_iid]['initial_year'] > year:
-                    courses[course_iid]['initial_year'] = year
-                elif courses[course_iid]['final_year'] < year:
-                    courses[course_iid]['final_year'] = year
+                year = int(year_ext.findall(year_link.attrs['href'])[0])
+                courses[course_id].add_year(year)
 
         # fetch course abbreviation from the statistics page
         for degree in database.degrees:
             hierarchy = parse_clean_request(session.get(urls.STATISTICS.format(institution, degree)))
             course_links = hierarchy.find_all(href=course_exp)
             for course_link in course_links:
-                course_iid = course_link.attrs['href'].split('=')[-1]
-                abbr = course_link.contents[0]
-                if course_iid in courses:
-                    courses[course_iid]['abbreviation'] = abbr
-                    courses[course_iid]['degree'] = database.degrees[degree]['id']
+                course_id = course_exp.findall(course_link.attrs['href'])[0]
+                abbr = course_link.contents[0].strip()
+                if course_id in courses:
+                    courses[course_id].abbreviation = abbr
+                    courses[course_id].degree = database.degrees[degree]['id']
                 else:
-                    raise Exception("Course {}({}) was listed in the abbreviation list but wasn't found".format(
-                        abbr, course_iid))
+                    raise Exception(
+                        "{}({}) was listed in the abbreviation list but a corresponding course wasn't found".format(
+                            abbr, course_id))
 
-        database.add_courses(courses)
+        database.add_courses(courses.values())
 
 
 # populate student list from the national access contest (also obtain their preferences and current status)
-def populate_nac_students(session, database):
+def populate_nac_students(session, database):  # TODO threading (rework the database to save states apart), murder CLIP!
     admissions = []
+    course_exp = re.compile("\\bcurso=(\d+)$")
     for institution in database.institutions:
-        for year in range(
-                database.institutions[institution]['initial_year'],
-                database.institutions[institution]['last_year'] + 1):
+        if not database.institutions[institution].has_time_range():  # if it has no time range to iterate through
+            continue
+        years = range(database.institutions[institution].initial_year, database.institutions[institution].last_year + 1)
+        for year in years:
             courses = set()
             hierarchy = parse_clean_request(session.get(urls.ADMISSIONS.format(year, institution)))
-            course_links = hierarchy.find_all(href=re.compile("\\bcurso=\\d+$"))
+            course_links = hierarchy.find_all(href=course_exp)
             for course_link in course_links:  # find every course that had students that year
-                courses.add(course_link.attrs['href'].split('=')[-1])
+                courses.add(course_exp.findall(course_link.attrs['href'])[0])
 
             for course in courses:  # for every course
                 if course not in database.courses:
@@ -202,20 +191,11 @@ def populate_nac_students(session, database):
                         if student_iid is not None:  # if the student has an iid add it to the database
                             student_id = database.add_student(student_iid, name, course=course, institution=institution)
 
-                        print("Found {}(iid: {}). Admitted in the phase {} of {} (option:{}). Current state: {}".format(
-                            name, student_iid, phase, year, option, state))
                         name = name if student_id is None else None
-                        admissions.append({
-                            'student_id': student_id,
-                            'course': course,
-                            'phase': phase,
-                            'year': year,
-                            'option': option,
-                            'state': state,
-                            'check_date': datetime.now(),
-                            'name': name
-                        })
-    database.add_admissions(admissions)
+                        admission = Admission(student_id, name, course, phase, year, option, state)
+                        print("Found admission: {}".format(admission))
+                        admissions.append(admission)
+        database.add_admissions(admissions)
 
 
 def populate_class_instances(session, database):

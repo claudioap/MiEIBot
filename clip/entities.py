@@ -1,3 +1,6 @@
+from datetime import datetime
+
+
 class AbstractEntity:
     def __init__(self, identifier, db_id=None):
         self.identifier = identifier
@@ -86,3 +89,37 @@ class ClassInstance:
 
     def __str__(self):
         return "{} on period {} of {}".format(self.class_id, self.period, self.year)
+
+
+class Course(TemporalEntity):
+    def __init__(self, identifier, name, abbreviation, degree, institution,
+                 initial_year=None, last_year=None, db_id=None):
+        super().__init__(identifier, initial_year, last_year, db_id=db_id)
+        self.name = name
+        self.abbreviation = abbreviation
+        self.degree = degree
+        self.institution = institution
+
+    def __str__(self):
+        return ("{}(id:{} abbr:{}, deg:{} inst:{}, db:{})".format(
+            self.name, self.identifier, self.abbreviation, self.degree, self.institution, self.db_id)
+                + super().__str__())
+
+
+class Admission:
+    def __init__(self, student_id, name, course, phase, year, option, state, check_date=None, db_id=None):
+        self.student_id = student_id
+        self.name = name
+        self.course = course
+        self.phase = phase
+        self.year = year
+        self.option = option
+        self.state = state
+        self.check_date = check_date if check_date is not None else datetime.now()
+        self.class_db_id = db_id
+
+    def __str__(self):
+        return ("{}, admitted to {} (option {}) at the phase {} of the {} contest. {} as of {}".format(
+            (self.student_id if self.student_id is not None else self.name),
+            self.course, self.option, self.phase, self.year, self.state, self.check_date)
+                + (' (DB: {})'.format(self.class_db_id) if self.class_db_id is not None else ''))
