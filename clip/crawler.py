@@ -4,6 +4,7 @@ from unicodedata import normalize
 import re
 
 from clip import urls
+from clip.entities import ClassInstance, Class
 from clip.utils import parse_clean_request, abbr_to_course_iid, weekday_to_id
 
 
@@ -27,6 +28,49 @@ class PageCrawler(Thread):
             else:
                 self.queue_lock.release()
                 break
+
+
+def crawl_classes(session, database, department):
+    class_db_ids = {}
+    class_instances = []
+
+    period_exp = re.compile('&tipo_de_per%EDodo_lectivo=(?P<type>\w)&per%EDodo_lectivo=(?P<stage>\d)$')
+    class_exp = re.compile('&unidade_curricular=(\d+)')
+
+    # for each year this department operated
+    for year in range(department.initial_year, department.last_year + 1):
+        hierarchy = parse_clean_request(session.get(
+            urls.CLASSES.format(department.institution, year, department.identifier)))
+
+        period_links = hierarchy.find_all(href=period_exp)
+
+        # for each period this department teaches
+        for period_link in period_links:
+            match = period_exp.search(period_link.attrs['href'])
+            period_type = match.group("type")
+            stage = int(match.group("stage"))
+
+            if period_type not in database.periods:
+                raise Exception("Unknown period")
+
+            period_id = database.periods[period_type][stage]
+            hierarchy = parse_clean_request(session.get(urls.CLASSES_PERIOD.format(
+                period_type, department.identifier, year, stage, department.institution)))
+
+            class_links = hierarchy.find_all(href=class_exp)
+
+            # for each class in this period
+            for class_link in class_links:
+                class_id = class_exp.findall(class_link.attrs['href'])[0]
+                class_name = class_link.contents[0]
+                if class_id not in class_db_ids:
+                    class_db_ids[class_id] = database.add_class(Class(class_id, class_name, department.identifier))
+
+                class_instances.append(
+                    ClassInstance(class_id, period_id, year, class_db_id=class_db_ids[class_id]))
+
+        database.commit()
+    database.add_class_instances(class_instances)
 
 
 def crawl_class_instance(session, database, class_instance_info):

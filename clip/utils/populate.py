@@ -1,16 +1,17 @@
 import logging
 import re
 from datetime import datetime
+from queue import Queue
 from time import sleep
 from threading import Lock
 
-from clip import urls, Database, Session
-from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance
-from clip.entities import Institution, Department, Class, ClassInstance
+from clip import urls
+from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance, crawl_classes
+from clip.entities import Institution, Department
 from clip.utils import parse_clean_request
 
 logging.basicConfig(level=logging.INFO)
-THREADS = 1
+THREADS = 8
 
 
 # TODO port dictionaries to classes
@@ -36,7 +37,8 @@ def populate_institutions(session, database):
 
     for institution in institutions:
         print("Institution found: " + str(institution))
-    # database.add_institutions(institutions)
+
+    database.add_institutions(institutions)
 
 
 def populate_departments(session, database):
@@ -73,50 +75,38 @@ def populate_departments(session, database):
     database.add_departments(departments.values())
 
 
-def populate_classes(session, database):  # TODO threading
+def populate_classes(session, database):
+    department_queue = Queue()
+    [department_queue.put(department) for department in database.departments.values()]
+    department_lock = Lock()
 
-    period_exp = re.compile('&tipo_de_per%EDodo_lectivo=(?P<type>\w)&per%EDodo_lectivo=(?P<stage>\d)$')
-    class_exp = re.compile('&unidade_curricular=(\d+)')
+    threads = []
+    for thread in range(0, THREADS):
+        threads.append(
+            PageCrawler(
+                "Thread-" + str(thread),
+                session,
+                database,
+                department_queue,
+                department_lock,
+                crawl_classes
+            ))
+        threads[thread].start()
 
-    for department in database.departments.values():  # for every department
-        class_db_ids = {}
-        class_instances = []
+    while True:
+        department_lock.acquire()
+        if department_queue.empty():
+            department_lock.release()
+            break
+        else:
+            print(
+                "{} departments remaining!".format(
+                    department_queue.qsize()))
+            department_lock.release()
+            sleep(5)
 
-        # for each year this department operated
-        for year in range(department.initial_year, department.last_year + 1):
-            hierarchy = parse_clean_request(session.get(
-                urls.CLASSES.format(department.institution, year, department.identifier)))
-
-            period_links = hierarchy.find_all(href=period_exp)
-
-            # for each period this department teaches
-            for period_link in period_links:
-                match = period_exp.search(period_link.attrs['href'])
-                period_type = match.group("type")
-                stage = int(match.group("stage"))
-
-                if period_type not in database.periods:
-                    raise Exception("Unknown period")  # TODO improve
-
-                period_id = database.periods[period_type][stage]
-                hierarchy = parse_clean_request(session.get(urls.CLASSES_PERIOD.format(
-                    period_type, department.identifier, year, stage, department.institution)))
-
-                class_links = hierarchy.find_all(href=class_exp)
-
-                # for each class in this period
-                for class_link in class_links:
-                    class_id = class_exp.findall(class_link.attrs['href'])[0]
-                    class_name = class_link.contents[0]
-                    if class_id not in class_db_ids:
-                        class_db_ids[class_id] = database.add_class(Class(class_id, class_name, department.identifier))
-
-                    class_instances.append(
-                        ClassInstance(class_id, period_id, year, class_db_id=class_db_ids[class_id]))
-
-            database.commit()
-        print("Adding class instances of department {} to the database.".format(department))
-        database.add_class_instances(class_instances)
+    for thread in threads:
+        thread.join()
 
 
 def populate_courses(session, database):
