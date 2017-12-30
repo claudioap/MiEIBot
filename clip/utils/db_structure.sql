@@ -34,13 +34,13 @@ CREATE TABLE IF NOT EXISTS "TurnTypes" (
   PRIMARY KEY (`id`)
 );
 
-CREATE TABLE IF NOT EXISTS "Institutions" (
-  id           INTEGER PRIMARY KEY,
-  internal_id  TEXT,
-  abbreviation TEXT NOT NULL,
-  name         TEXT,
-  initial_year INTEGER,
-  last_year    INTEGER
+CREATE TABLE IF NOT EXISTS `Institutions` (
+  `id`           INTEGER PRIMARY KEY AUTOINCREMENT,
+  `internal_id`  TEXT,
+  `abbreviation` TEXT NOT NULL,
+  `name`         TEXT,
+  `initial_year` INTEGER,
+  `last_year`    INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS "Buildings" (
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS "Courses" (
   `internal_id`  TEXT,
   `degree`       INTEGER,
   `initial_year` INTEGER,
-  `final_year`   INTEGER
+  `last_year`    INTEGER
 );
 
 /* Dependencies: Courses, Institution (both optional, can be found through JOIN's) */
@@ -206,7 +206,7 @@ INSERT INTO `Degrees` VALUES (7, 'Pre Graduation', 'Pré-Graduação', 'pG');
 INSERT INTO `Degrees` VALUES (8, 'Curso Técnico Superior Profissional', 'Curso Técnico Superior Profissional', NULL);
 
 
-CREATE VIEW 'ClassesComplete' AS
+CREATE VIEW IF NOT EXISTS 'ClassesComplete' AS
   SELECT
     Periods.stage             AS 'period',
     Periods.stages            AS 'total_periods',
@@ -223,19 +223,20 @@ CREATE VIEW 'ClassesComplete' AS
     JOIN Departments ON Classes.department = Departments.id
     JOIN Institutions ON Departments.institution = Institutions.id;
 
-CREATE VIEW 'ClassInstancesComplete' AS
+CREATE VIEW IF NOT EXISTS 'ClassInstancesComplete' AS
   SELECT
     ClassInstances.id        AS 'class_instance_id',
-    Periods.stage            AS 'period_stage',
-    Periods.type_letter      AS 'period_letter',
+    Periods.id               AS 'period_id',
     ClassInstances.year      AS 'year',
     Classes.internal_id      AS 'class_iid',
+    Classes.id               AS 'class_id',
+    Classes.name             AS 'class_name',
     Departments.internal_id  AS 'department_iid',
     Institutions.internal_id AS 'institution_iid'
   FROM ClassInstances
     JOIN Periods ON Periods.id = ClassInstances.period
     JOIN Classes ON ClassInstances.class = Classes.id
     JOIN Departments ON Classes.department = Departments.id
-    JOIN Institutions ON Departments.institution = Institutions.id;
+    JOIN Institutions ON Departments.institution = Institutions.id
 
 COMMIT;

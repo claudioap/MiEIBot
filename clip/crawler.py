@@ -1,15 +1,17 @@
-from threading import Thread
+from queue import Queue
+from threading import Thread, Lock
 from unicodedata import normalize
 
 import re
 
-from clip import urls
-from clip.entities import ClassInstance, Class
-from clip.utils import parse_clean_request, abbr_to_course_iid, weekday_to_id
+from clip import urls, Database, Session
+from clip.entities import ClassInstance, Class, Enrollment, Department, Student, Turn, TurnInstance
+from clip.utils import parse_clean_request, abbreviation_to_course, weekday_to_id
 
 
 class PageCrawler(Thread):
-    def __init__(self, name, clip_session, database, work_queue, queue_lock, crawl_function):
+    def __init__(self, name, clip_session: Session, database: Database, work_queue: Queue, queue_lock: Lock,
+                 crawl_function):
         Thread.__init__(self)
         self.name = name
         self.session = clip_session
@@ -30,8 +32,8 @@ class PageCrawler(Thread):
                 break
 
 
-def crawl_classes(session, database, department):
-    class_db_ids = {}
+def crawl_classes(session: Session, database: Database, department: Department):
+    classes = {}
     class_instances = []
 
     period_exp = re.compile('&tipo_de_per%EDodo_lectivo=(?P<type>\w)&per%EDodo_lectivo=(?P<stage>\d)$')
@@ -40,7 +42,7 @@ def crawl_classes(session, database, department):
     # for each year this department operated
     for year in range(department.initial_year, department.last_year + 1):
         hierarchy = parse_clean_request(session.get(
-            urls.CLASSES.format(department.institution, year, department.identifier)))
+            urls.CLASSES.format(department.institution.identifier, year, department.identifier)))
 
         period_links = hierarchy.find_all(href=period_exp)
 
@@ -53,33 +55,33 @@ def crawl_classes(session, database, department):
             if period_type not in database.periods:
                 raise Exception("Unknown period")
 
-            period_id = database.periods[period_type][stage]
+            period = database.periods[period_type][stage]
             hierarchy = parse_clean_request(session.get(urls.CLASSES_PERIOD.format(
-                period_type, department.identifier, year, stage, department.institution)))
+                period_type, department.identifier, year, stage, department.institution.identifier)))
 
             class_links = hierarchy.find_all(href=class_exp)
 
             # for each class in this period
             for class_link in class_links:
                 class_id = class_exp.findall(class_link.attrs['href'])[0]
-                class_name = class_link.contents[0]
-                if class_id not in class_db_ids:
-                    class_db_ids[class_id] = database.add_class(Class(class_id, class_name, department.identifier))
+                class_name = class_link.contents[0].strip()
+                if class_id not in classes:
+                    classes[class_id] = database.add_class(Class(class_id, class_name, department.identifier))
 
-                class_instances.append(
-                    ClassInstance(class_id, period_id, year, class_db_id=class_db_ids[class_id]))
+                class_instances.append(ClassInstance(classes[class_id], period, year))
 
         database.commit()
     database.add_class_instances(class_instances)
 
 
-def crawl_class_instance(session, database, class_instance_info):
+def crawl_class_instance(session: Session, database: Database, class_instance: ClassInstance):
+    institution = class_instance.parent_class.department.institution
+
     hierarchy = parse_clean_request(
         session.get(urls.CLASS_ENROLLED.format(
-            class_instance_info['period_type'], class_instance_info['department'],
-            class_instance_info['year'], class_instance_info['period'],
-            class_instance_info['institution'], class_instance_info['class']
-        )))
+            class_instance.period.letter, class_instance.parent_class.department.identifier,
+            class_instance.year, class_instance.period.stage, institution.identifier,
+            class_instance.parent_class.identifier)))
 
     # Strip file header and split it into lines
     content = hierarchy.text.splitlines()[4:]
@@ -100,36 +102,30 @@ def crawl_class_instance(session, database, class_instance_info):
         attempt = int(information[5].strip().rstrip('ºª'))
         student_year = int(information[6].strip().rstrip('ºª'))
 
-        print("{}({}, {}) being enrolled to {} for the {} time (grade {})".format(
-            student_name, student_abbr, student_iid, class_instance_info['class'], attempt, student_year))
-        course = abbr_to_course_iid(database, course_abbr, year=class_instance_info['year'])  # find course id
+        course = abbreviation_to_course(database, course_abbr, year=class_instance.year)
+
         # TODO consider sub-courses EG: MIEA/[Something]
         observation = course_abbr if course is not None else (course_abbr + "(Unknown)")
         # update student info and take id
-        student_id = database.add_student_info(
-            student_iid, student_name,
-            course_id=course, abbr=student_abbr,
-            institution_id=class_instance_info['institution'])
-        enrollments.append({
-            'student_id': student_id,
-            'class_instance': class_instance_info['class_instance'],
-            'attempt': attempt,
-            'student_year': student_year,
-            'statutes': student_statutes,
-            'observation': observation
-        })
+        student = database.add_student(
+            Student(student_iid, student_name, abbreviation=student_abbr, course=course, institution=institution))
+
+        enrollment = Enrollment(student, class_instance, attempt, student_year, student_statutes, observation)
+        enrollments.append(enrollment)
+        print("Enrollment found: {}".format(enrollment))
+
     database.add_enrollments(enrollments)
 
 
-def crawl_class_turns(session, database, class_instance_info):
+def crawl_class_turns(session: Session, database: Database, class_instance: ClassInstance):
+    institution = class_instance.parent_class.department.institution
     hierarchy = parse_clean_request(
         session.get(urls.TURNS_INFO.format(
-            class_instance_info['class'], class_instance_info['institution'],
-            class_instance_info['year'], class_instance_info['period_type'],
-            class_instance_info['period'], class_instance_info['department'],
-        )))
+            class_instance.parent_class.identifier, institution.identifier,
+            class_instance.year, class_instance.period.letter,
+            class_instance.period.stage, class_instance.parent_class.department.identifier)))
 
-    turn_link_exp = re.compile("\\b&tipo=\\w+&n%BA=\\d+\\b")
+    turn_link_exp = re.compile("\\b&tipo=(?P<type>\\w)+&n%BA=(?P<number>\\d+)\\b")
     schedule_exp = re.compile(  # extract turn information
         '(?P<weekday>[\\w-]+) {2}'
         '(?P<init_hour>\\d{2}):(?P<init_min>\\d{2}) - (?P<end_hour>\\d{2}):(?P<end_min>\\d{2}) {2}'
@@ -150,10 +146,10 @@ def crawl_class_turns(session, database, class_instance_info):
         capacity = None
         students = []
 
-        turn_link_str_parts = turn_link.attrs['href'].split('&')
-        turn_type = turn_link_str_parts[-2].split('=')[1]
-        turn_number = int(turn_link_str_parts[-1].split('=')[1])
-        del turn_link_str_parts
+        turn_link_expression = turn_link_exp.search(turn_link.attrs['href'])
+        turn_type = turn_link_expression.group("type")
+        turn_number = int(turn_link_expression.group("number"))
+        del turn_link_expression
 
         hierarchy = parse_clean_request(session.get(urls.ROOT + turn_link.attrs['href']))  # fetch turn
 
@@ -171,11 +167,11 @@ def crawl_class_turns(session, database, class_instance_info):
         previous_key = None
         for table_row in information_rows:
             if len(table_row.contents) < 3:  # several lines ['\n', 'value']
-                fields[previous_key].append(normalize("NFKC", table_row.contents[1].text.strip()))
+                fields[previous_key].append(normalize('NFKC', table_row.contents[1].text.strip()))
             else:  # inline info ['\n', 'key', '\n', 'value']
                 key = table_row.contents[1].text.strip().lower()
                 previous_key = key
-                fields[key] = [normalize("NFKC", table_row.contents[3].text.strip())]
+                fields[key] = [normalize('NFKC', table_row.contents[3].text.strip())]
 
         del previous_key
 
@@ -194,13 +190,8 @@ def crawl_class_turns(session, database, class_instance_info):
                     room = information.group('room')
                     building = building if building is not None else information.group('alt_building')
 
-                    instances.append({
-                        'weekday': weekday,
-                        'start': start,
-                        'end': end,
-                        'room': room,
-                        'building': building
-                    })
+                    # TODO fix that classroom thingy, also figure a way to create the turn before its instances
+                    instances.append(TurnInstance(None, start, end, weekday, classroom=room + '|' + building))
             elif field == "turno":
                 pass
             elif "percursos" in field:
@@ -235,17 +226,17 @@ def crawl_class_turns(session, database, class_instance_info):
             student_iid = student_row.contents[3].text.strip()
             student_abbr = student_row.contents[5].text.strip()
             course_abbr = student_row.contents[7].text.strip()
-            course_iid = abbr_to_course_iid(database, course_abbr)
+            course_iid = abbreviation_to_course(database, course_abbr)
 
             # make sure he/she is in the db and have his/her db id
-            student_id = database.add_student_info(
-                student_iid, student_name, course=course_iid, abbr=student_abbr, institution=None, commit=False)
+            student_id = database.add_student_info(student_iid, student_name, course=course_iid, abbr=student_abbr)
             students.append(student_id)
 
-        turn_id = database.add_turn(
-            class_instance_info['class_instance'], turn_number, turn_type,
-            restrictions=restrictions, weekly_hours=weekly_hours, enrolled=enrolled,
-            teachers=teachers, routes=routes, state=state, capacity=capacity)
+        turn = Turn(class_instance, turn_number, turn_type, enrolled, capacity,
+                    hours=weekly_hours, routes=routes, restrictions=restrictions, state=state)
+        turn = database.add_turn(turn)
+        for instance in instances:
+            instance.turn = turn
 
-        database.add_turn_instances(turn_id, instances)
-        database.add_turn_students(turn_id, students)
+        database.add_turn_instances(instances)
+        database.add_turn_students(turn, students)

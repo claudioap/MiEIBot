@@ -4,16 +4,17 @@ from queue import Queue
 from time import sleep
 from threading import Lock
 
-from clip import urls
+from clip import urls, Session, Database
 from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance, crawl_classes
-from clip.entities import Institution, Department, Admission, Course
+from clip.entities import Institution, Department, Course, Student, Admission
 from clip.utils import parse_clean_request
 
-logging.basicConfig(level=logging.INFO)
-THREADS = 8
+logging.basicConfig(level=logging.DEBUG)
+log = logging.getLogger(__name__)
+THREADS = 8  # high number means "Murder CLIP!", take care
 
 
-def populate_institutions(session, database):
+def institutions(session: Session, database: Database):
     institutions = []
     hierarchy = parse_clean_request(session.get(urls.INSTITUTIONS))
     link_exp = re.compile('/?institui%E7%E3o=(\d+)$')
@@ -25,21 +26,21 @@ def populate_institutions(session, database):
 
     for institution in institutions:
         hierarchy = parse_clean_request(session.get(urls.INSTITUTION_YEARS.format(institution.identifier)))
-        year_exp = re.compile("\b\d{4}\b")
+        year_exp = re.compile("\\b\d{4}\\b")
         institution_links = hierarchy.find_all(href=year_exp)
         for institution_link in institution_links:
             year = int(year_exp.findall(institution_link.attrs['href'])[0])
             institution.add_year(year)
 
     for institution in institutions:
-        print("Institution found: " + str(institution))
+        log.debug("Institution found: " + str(institution))
 
     database.add_institutions(institutions)
 
 
-def populate_departments(session, database):
+def departments(session: Session, database: Database):
     departments = {}  # internal_id -> Department
-    department_exp = re.compile('\bsector=(\d+)\b')
+    department_exp = re.compile('\\bsector=(\d+)\\b')
     for institution in database.institutions.values():
 
         if not institution.has_time_range():  # if it has no time range to iterate through
@@ -56,7 +57,7 @@ def populate_departments(session, database):
 
                 if department_id in departments:  # update creation year
                     department = departments[department_id]
-                    if department.institution != institution.identifier:
+                    if department.institution != institution:
                         raise Exception("Department {}({}) found in different institutions ({} and {})".format(
                             department.name,
                             department_id,
@@ -65,13 +66,13 @@ def populate_departments(session, database):
                         ))
                     department.add_year(year)
                 else:  # insert new
-                    department = Department(department_id, department_name, institution.identifier, year, year)
+                    department = Department(department_id, department_name, institution, year, year)
                     departments[department_id] = department
     print("Departments crawled. Database, its up to you!")
     database.add_departments(departments.values())
 
 
-def populate_classes(session, database):
+def classes(session: Session, database: Database):
     department_queue = Queue()
     [department_queue.put(department) for department in database.departments.values()]
     department_lock = Lock()
@@ -105,9 +106,10 @@ def populate_classes(session, database):
         thread.join()
 
 
-def populate_courses(session, database):
+def courses(session: Session, database: Database):
     course_exp = re.compile("\\bcurso=(\d+)\\b")
     year_ext = re.compile("\\bano_lectivo=(\d+)\\b")
+
     for institution in database.institutions:
         courses = {}
         hierarchy = parse_clean_request(session.get(urls.COURSES.format(institution)))
@@ -127,44 +129,43 @@ def populate_courses(session, database):
                 courses[course_id].add_year(year)
 
         # fetch course abbreviation from the statistics page
-        for degree in database.degrees:
-            hierarchy = parse_clean_request(session.get(urls.STATISTICS.format(institution, degree)))
+        for degree in database.degrees.values():
+            hierarchy = parse_clean_request(session.get(urls.STATISTICS.format(institution, degree.abbreviation)))
             course_links = hierarchy.find_all(href=course_exp)
             for course_link in course_links:
                 course_id = course_exp.findall(course_link.attrs['href'])[0]
-                abbr = course_link.contents[0].strip()
+                abbreviation = course_link.contents[0].strip()
                 if course_id in courses:
-                    courses[course_id].abbreviation = abbr
-                    courses[course_id].degree = database.degrees[degree]['id']
+                    courses[course_id].abbreviation = abbreviation
+                    courses[course_id].degree = degree
                 else:
                     raise Exception(
                         "{}({}) was listed in the abbreviation list but a corresponding course wasn't found".format(
-                            abbr, course_id))
+                            abbreviation, course_id))
 
         database.add_courses(courses.values())
 
 
 # populate student list from the national access contest (also obtain their preferences and current status)
-def populate_nac_students(session, database):  # TODO threading (rework the database to save states apart), murder CLIP!
+def nac_admissions(session: Session, database: Database):  # TODO threading (rework the database to save states apart)
     admissions = []
     course_exp = re.compile("\\bcurso=(\d+)$")
-    for institution in database.institutions:
-        if not database.institutions[institution].has_time_range():  # if it has no time range to iterate through
+    for institution in database.institutions.values():
+        if not institution.has_time_range():  # if it has no time range to iterate through
             continue
-        years = range(database.institutions[institution].initial_year, database.institutions[institution].last_year + 1)
+        years = range(institution.initial_year, institution.last_year + 1)
         for year in years:
             courses = set()
-            hierarchy = parse_clean_request(session.get(urls.ADMISSIONS.format(year, institution)))
+            hierarchy = parse_clean_request(session.get(urls.ADMISSIONS.format(year, institution.identifier)))
             course_links = hierarchy.find_all(href=course_exp)
             for course_link in course_links:  # find every course that had students that year
                 courses.add(course_exp.findall(course_link.attrs['href'])[0])
 
-            for course in courses:  # for every course
-                if course not in database.courses:
-                    raise Exception("Unknown course")
-
+            for course_id in courses:
+                course = database.courses[course_id]
                 for phase in range(1, 4):  # for every of the three phases
-                    hierarchy = parse_clean_request(session.get(urls.ADMITTED.format(year, institution, phase, course)))
+                    hierarchy = parse_clean_request(
+                        session.get(urls.ADMITTED.format(year, institution.identifier, phase, course_id)))
                     # find the table structure containing the data (only one with those attributes)
                     table_root = hierarchy.find('th', colspan="8", bgcolor="#95AEA8").parent.parent
 
@@ -186,19 +187,20 @@ def populate_nac_students(session, database):  # TODO threading (rework the data
                         option = None if option == '' else int(option)
                         state = state if state != '' else None
 
-                        student_id = None
+                        student = None
 
-                        if student_iid is not None:  # if the student has an iid add it to the database
-                            student_id = database.add_student(student_iid, name, course=course, institution=institution)
+                        if student_iid is not None:  # if the student has an id add him/her to the database
+                            student = database.add_student(
+                                Student(student_iid, name, course=course, institution=institution))
 
-                        name = name if student_id is None else None
-                        admission = Admission(student_id, name, course, phase, year, option, state)
+                        name = name if student is None else None
+                        admission = Admission(student, name, course, phase, year, option, state)
                         print("Found admission: {}".format(admission))
                         admissions.append(admission)
         database.add_admissions(admissions)
 
 
-def populate_class_instances(session, database):
+def class_instances(session: Session, database: Database):
     class_instances_queue = database.fetch_class_instances()
     class_instances_lock = Lock()
 
@@ -231,8 +233,8 @@ def populate_class_instances(session, database):
         threads[thread].join()
 
 
-def populate_class_instances_turns(session, database):
-    class_instances_queue = database.fetch_class_instances(year_asc=False)
+def class_instances_turns(session: Session, database: Database):
+    class_instances_queue = database.fetch_class_instances(year_asc=False, queue=True)
     class_instances_lock = Lock()
 
     threads = []
@@ -264,10 +266,11 @@ def populate_class_instances_turns(session, database):
         threads[thread].join()
 
 
-def populate_database_from_scratch(session, database):
-    populate_institutions(session, database)
-    populate_departments(session, database)
-    populate_classes(session, database)
-    populate_courses(session, database)
-    populate_nac_students(session, database)
-    populate_class_instances(session, database)
+def database_from_scratch(session: Session, database: Database):
+    institutions(session, database)  # 10 seconds
+    departments(session, database)  # <1 minute
+    classes(session, database)  # ~10 minutes
+    courses(session, database)  # ~5 minutes
+    nac_admissions(session, database)  # ~20 minutes (probably <5 after threaded implementation w/8 threads)
+    class_instances(session, database)  # ~1 hour
+    class_instances_turns(session, database)  # ?

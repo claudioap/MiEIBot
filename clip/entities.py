@@ -1,7 +1,7 @@
 from datetime import datetime
 
 
-class AbstractEntity:
+class IdentifiedEntity:
     def __init__(self, identifier, db_id=None):
         self.identifier = identifier
         self.db_id = db_id
@@ -15,7 +15,7 @@ class AbstractEntity:
         return False
 
 
-class TemporalEntity(AbstractEntity):
+class TemporalEntity(IdentifiedEntity):
     def __init__(self, identifier, initial_year=None, last_year=None, db_id=None):
         super().__init__(identifier, db_id=db_id)
         self.initial_year = initial_year
@@ -54,7 +54,7 @@ class Institution(TemporalEntity):
 
 
 class Department(TemporalEntity):
-    def __init__(self, identifier, name, institution, initial_year=None, last_year=None, db_id=None):
+    def __init__(self, identifier, name: str, institution: Institution, initial_year=None, last_year=None, db_id=None):
         super().__init__(identifier, last_year=last_year, db_id=db_id)
         self.name = name
         self.institution = institution
@@ -68,7 +68,29 @@ class Department(TemporalEntity):
                 + super().__str__())
 
 
-class Class(AbstractEntity):
+class Period:
+    def __init__(self, stage: int, stages: int, letter=None, db_id=None):
+        self.stage = stage
+        self.stages = stages
+        self.letter = letter
+        self.db_id = db_id
+
+    def __str__(self):
+        return ("{} out of {}({})".format(self.stage, self.stages, self.letter)
+                + '' if self.db_id is None else ' (DB:{})'.format(self.db_id))
+
+
+class Degree(IdentifiedEntity):
+    def __init__(self, identifier, name, db_id=None):
+        super().__init__(identifier, db_id)
+        self.name = name
+
+    def __str__(self):
+        return ("{}({})".format(self.name, self.identifier)
+                + '' if self.db_id is None else ' (DB:{})'.format(self.db_id))
+
+
+class Class(IdentifiedEntity):
     def __init__(self, identifier, name, department, db_id=None):
         super().__init__(identifier, db_id=db_id)
         self.name = name
@@ -81,18 +103,18 @@ class Class(AbstractEntity):
 
 
 class ClassInstance:
-    def __init__(self, class_id, period, year, class_db_id=None):
-        self.class_id = class_id
+    def __init__(self, parent_class: Class, period: Period, year: int, db_id=None):
+        self.parent_class = parent_class
         self.period = period
         self.year = year
-        self.class_db_id = class_db_id
+        self.db_id = db_id
 
     def __str__(self):
-        return "{} on period {} of {}".format(self.class_id, self.period, self.year)
+        return "{} on period {} of {}".format(self.parent_class, self.period, self.year)
 
 
 class Course(TemporalEntity):
-    def __init__(self, identifier, name, abbreviation, degree, institution,
+    def __init__(self, identifier, name: str, abbreviation: str, degree: Degree, institution: Institution,
                  initial_year=None, last_year=None, db_id=None):
         super().__init__(identifier, initial_year, last_year, db_id=db_id)
         self.name = name
@@ -106,9 +128,24 @@ class Course(TemporalEntity):
                 + super().__str__())
 
 
+class Student(IdentifiedEntity):
+    def __init__(self, identifier, name: str, abbreviation=None, course=None, institution=None, db_id=None):
+        super().__init__(identifier, db_id=db_id)
+        self.name = name
+        self.abbreviation = abbreviation
+        self.course = course
+        self.institution = institution
+        self.db_id = db_id
+
+    def __str__(self):
+        return ("{} ({}, {})".format(self.name, self.identifier, self.abbreviation)
+                + '' if self.db_id is None else ' (DB:{})'.format(self.db_id))
+
+
 class Admission:
-    def __init__(self, student_id, name, course, phase, year, option, state, check_date=None, db_id=None):
-        self.student_id = student_id
+    def __init__(self, student, name: str, course: Course, phase: int, year: int, option: int, state,
+                 check_date=None, db_id=None):
+        self.student = student
         self.name = name
         self.course = course
         self.phase = phase
@@ -119,7 +156,72 @@ class Admission:
         self.class_db_id = db_id
 
     def __str__(self):
-        return ("{}, admitted to {} (option {}) at the phase {} of the {} contest. {} as of {}".format(
-            (self.student_id if self.student_id is not None else self.name),
-            self.course, self.option, self.phase, self.year, self.state, self.check_date)
+        return ("{}, admitted to {}({}) (option {}) at the phase {} of the {} contest. {} as of {}".format(
+            (self.student.name if self.student is not None else self.name),
+            self.course.name, self.course.identifier, self.option, self.phase, self.year, self.state, self.check_date)
                 + (' (DB: {})'.format(self.class_db_id) if self.class_db_id is not None else ''))
+
+
+class Enrollment:
+    def __init__(self, student: Student, class_instance: ClassInstance, attempt: int, student_year: int,
+                 statutes, observation):
+        self.student = student
+        self.class_instance = class_instance
+        self.attempt = attempt
+        self.student_year = student_year
+        self.statutes = statutes
+        self.observation = observation
+
+    def __str__(self):
+        return "{} enrolled to {}, attempt:{}, student year:{}, statutes:{}, obs:{}".format(
+            self.student, self.class_instance, self.attempt, self.student_year, self.statutes, self.observation)
+
+
+class Building:
+    def __init__(self, name: str, db_id=None):
+        self.name = name
+        self.db_id = db_id
+
+
+class Classroom(IdentifiedEntity):
+    def __init__(self, number, building: Building, db_id=None):
+        super().__init__(number, db_id)
+        self.building = building
+
+
+class Turn:
+    def __init__(self, class_instance: ClassInstance, number: int, turn_type, enrolled: int, capacity: int,
+                 hours=None, routes=None, restrictions=None, state=None, teachers=list(), db_id=None):
+        self.class_instance = class_instance
+        self.number = number
+        self.type = turn_type
+        self.enrolled = enrolled
+        self.capacity = capacity
+        self.hours = hours
+        self.routes = routes
+        self.restrictions = restrictions
+        self.state = state
+        self.teachers = teachers
+        self.db_id = db_id
+
+    def __str__(self):
+        return "turn {}.{} of {} {}/{} students, {} hours, {} routes, state={}, teachers={}".format(
+            self.type, self.number, self.class_instance, self.enrolled, self.capacity,
+            self.hours, self.routes, self.state, len(self.teachers))
+
+
+class TurnInstance:
+    def __init__(self, turn: Turn, start: int, end: int, weekday, classroom=None):
+        self.turn = turn
+        self.start = start
+        self.end = end
+        self.weekday = weekday
+        self.classroom = classroom
+
+    @staticmethod
+    def time_str(time):
+        return "{}:{}".format(time / 60, time % 60)
+
+    def __str__(self):
+        return "{} to {}, day:{}, turn{}".format(
+            self.time_str(self.start), self.time_str(self.end), self.weekday, self.turn)
