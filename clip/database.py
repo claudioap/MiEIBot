@@ -467,17 +467,15 @@ class Database:
 
     # adds/updates the student information. Returns student id. DOES NOT COMMIT BY DEFAULT
     def add_student(self, student: Student, commit=False) -> Student:
-
         course_db_id = None if student.course is None else student.course.db_id
         institution_id = None if student.institution is None else student.institution.db_id
-        abbreviation = student.abbreviation if student.abbreviation != '' else None
-        abbreviation = None if abbreviation is None else abbreviation.strip()
+        abbreviation = None if student.abbreviation is None else student.abbreviation.strip()
         abbreviation = None if abbreviation == '' else abbreviation
 
         if student.name is None or student.name == '':
             raise Exception("Invalid name")
 
-        self.lock.acquire()
+        self.lock.acquire()  # lock the database for the whole insertion to prevent data races
         try:
             if institution_id is None:
                 self.cursor.execute('SELECT id, abbreviation, course, institution '
@@ -490,42 +488,34 @@ class Database:
                                     'WHERE internal_id=? AND name=? AND institution=?',
                                     (student.identifier, student.name, institution_id))
             matching_students = self.cursor.fetchall()
-        finally:
-            self.lock.release()
 
-        registered = False
-        if len(matching_students) == 0:  # new student, add him
-            self.lock.acquire()
-            try:
+            registered = False
+            if len(matching_students) == 0:  # new student, add him
                 self.cursor.execute('INSERT INTO STUDENTS(name, internal_id, abbreviation, course, institution) '
                                     'VALUES (?, ?, ?, ?, ?)',
                                     (student.name, student.identifier, student.abbreviation,
                                      course_db_id, institution_id))
                 log.info("New student saved: {})".format(student))
-            finally:
-                self.lock.release()
-        elif len(matching_students) == 1:
-            registered = True
-        else:  # bug or several institutions (don't know if it is even possible)
-            raise Exception("Duplicated student found: {}".format(student))
+            elif len(matching_students) == 1:
+                registered = True
+            else:  # bug or several institutions (don't know if it is even possible)
+                raise Exception("Duplicated student found: {}".format(student))
 
-        if registered:
-            stored_id = matching_students[0][0]
-            stored_abbr = matching_students[0][1]
-            stored_course = matching_students[0][2]
-            stored_institution = matching_students[0][3]
+            if registered:
+                stored_id = matching_students[0][0]
+                stored_abbr = matching_students[0][1]
+                stored_course = matching_students[0][2]
+                stored_institution = matching_students[0][3]
 
-            if abbreviation is not None and stored_abbr is not None and stored_abbr != abbreviation:
-                raise Exception("Abbreviation mismatch. {} != {}".format(abbreviation, stored_abbr))
+                if abbreviation is not None and stored_abbr is not None and stored_abbr != abbreviation:
+                    raise Exception("Abbreviation mismatch. {} != {}".format(abbreviation, stored_abbr))
 
-            if stored_abbr != abbreviation or stored_course != course_db_id or stored_institution != institution_id:
+                if stored_abbr != abbreviation or stored_course != course_db_id or stored_institution != institution_id:
 
-                new_abbr = stored_abbr if abbreviation is None else abbreviation
-                new_institution = stored_institution if institution_id is None else institution_id
-                new_course = stored_course if student.course is None else course_db_id
+                    new_abbr = stored_abbr if abbreviation is None else abbreviation
+                    new_institution = stored_institution if institution_id is None else institution_id
+                    new_course = stored_course if student.course is None else course_db_id
 
-                self.lock.acquire()
-                try:
                     self.cursor.execute("UPDATE STUDENTS "
                                         "SET abbreviation=?, institution=?, course=? "
                                         "WHERE id=?",
@@ -533,13 +523,10 @@ class Database:
                     log.info("Updated student info: {}".format(student))  # TODO proper logging
                     if commit:
                         self.link.commit()
-                finally:
-                    self.lock.release()
-                return stored_id
+                    student.db_id = stored_id
+                    return student
 
-        # new student, fetch the new id
-        self.lock.acquire()
-        try:
+            # new student, fetch the new id
             self.cursor.execute('SELECT id '
                                 'FROM Students '
                                 'WHERE internal_id=? AND name=?',
@@ -552,32 +539,27 @@ class Database:
             self.lock.release()
 
     def add_turn(self, turn: Turn, commit=False):
-        self.lock.acquire()
         try:
             self.cursor.execute(
                 'SELECT id, restrictions, hours, enrolled, capacity, routes, state '
                 'FROM Turns '
                 'WHERE class_instance=? AND number=? AND type=?')
             turns = self.cursor.fetchall()
-        finally:
-            self.lock.release()
 
-        type_id = self.turn_types[turn.type]
+            type_id = self.turn_types[turn.type]
 
-        if len(turns) > 1:
-            raise Exception("We've got a consistency problem... Turn {} \nMatches:{}".format(turn, str(turns)))
+            if len(turns) > 1:
+                raise Exception("We've got a consistency problem... Turn {} \nMatches:{}".format(turn, str(turns)))
 
-        if len(turns) == 0:
-            self.lock.acquire()
-            try:
+            if len(turns) == 0:
                 self.cursor.execute(
                     'INSERT INTO Turns'
                     '(class_instance, number, type, restrictions, hours, enrolled, routes, capacity, state) '
                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (turn.class_instance.db_id, turn.number, type_id, turn.restrictions,
                      turn.hours, turn.enrolled, turn.routes, turn.capacity, turn.state))
-            finally:
-                self.lock.release()
+        finally:
+            self.lock.release()
 
         old_turn_info = turns[0]
         new_turn = Turn(turn.class_instance, turn.number, turn.type, old_turn_info[3], old_turn_info[4],
@@ -728,10 +710,12 @@ class Database:
                         'INSERT INTO  Enrollments'
                         '(student_id, class_instance, attempt, student_year, statutes, observation) '
                         'VALUES (?, ?, ?, ?, ?, ?)',
-                        (enrollment.student_id, enrollment.class_instance, enrollment.attempt,
+                        (enrollment.student.db_id, enrollment.class_instance.db_id, enrollment.attempt,
                          enrollment.student_year, enrollment.statutes, enrollment.observation))
                 except sqlite3.Error:
                     log.warning("Enrollment skipped {}".format(enrollment))
+                except Exception:
+                    print("Hey hey hey")
         finally:
             self.lock.release()
         self.lock.acquire()
@@ -742,6 +726,11 @@ class Database:
 
     def fetch_class_instances(self, year_asc=True, queue=False):
         class_instances = []
+        periods = {}
+        for period_types in self.periods.values():
+            for period in period_types.values():
+                periods[period.db_id] = period
+
         if queue:
             class_instances = Queue()
 
@@ -766,10 +755,10 @@ class Database:
                 class_ = self.class_cache[instance[4]]
                 if queue:
                     class_instances.put(
-                        ClassInstance(class_, self.periods[instance[0]], instance[2], db_id=instance[0]))
+                        ClassInstance(class_, periods[instance[1]], instance[2], db_id=instance[0]))
                 else:
                     class_instances.append(
-                        ClassInstance(class_, self.periods[instance[0]], instance[2], db_id=instance[0]))
+                        ClassInstance(class_, periods[instance[1]], instance[2], db_id=instance[0]))
 
         finally:
             self.lock.release()

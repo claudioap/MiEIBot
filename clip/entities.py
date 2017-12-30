@@ -77,7 +77,7 @@ class Period:
 
     def __str__(self):
         return ("{} out of {}({})".format(self.stage, self.stages, self.letter)
-                + '' if self.db_id is None else ' (DB:{})'.format(self.db_id))
+                + ('' if self.db_id is None else ' (DB:{})'.format(self.db_id)))
 
 
 class Degree(IdentifiedEntity):
@@ -139,7 +139,7 @@ class Student(IdentifiedEntity):
 
     def __str__(self):
         return ("{} ({}, {})".format(self.name, self.identifier, self.abbreviation)
-                + '' if self.db_id is None else ' (DB:{})'.format(self.db_id))
+                + ('' if self.db_id is None else ' (DB:{})'.format(self.db_id)))
 
 
 class Admission:

@@ -237,6 +237,6 @@ CREATE VIEW IF NOT EXISTS 'ClassInstancesComplete' AS
     JOIN Periods ON Periods.id = ClassInstances.period
     JOIN Classes ON ClassInstances.class = Classes.id
     JOIN Departments ON Classes.department = Departments.id
-    JOIN Institutions ON Departments.institution = Institutions.id
+    JOIN Institutions ON Departments.institution = Institutions.id;
 
 COMMIT;

@@ -145,8 +145,12 @@ def crawl_class_instance(session: Session, database: Database, class_instance: C
     for line in content:  # for every student enrollment
         information = line.split('\t')
         if len(information) != 7:
-            log.warning("Invalid line")
-            continue
+            if len(hierarchy.find_all(string=re.compile("Pedido inválido"))) > 0:
+                log.debug("Instance skipped")
+                return
+            else:
+                log.warning("Invalid line")
+                continue
         # take useful information
         student_statutes = information[0].strip()
         student_name = information[1].strip()

@@ -182,7 +182,7 @@ def nac_admissions(session: Session, database: Database):
 
 
 def class_instances(session: Session, database: Database):
-    class_instances_queue = database.fetch_class_instances()
+    class_instances_queue = database.fetch_class_instances(queue=True)
     class_instances_lock = Lock()
 
     threads = []
@@ -239,5 +239,5 @@ def database_from_scratch(session: Session, database: Database):
     classes(session, database)  # ~10 minutes
     courses(session, database)  # ~5 minutes
     nac_admissions(session, database)  # ~20 minutes
-    class_instances(session, database)  # ~1 hour
-    class_instances_turns(session, database)  # ?
+    class_instances(session, database)  # ~4 hours
+    class_instances_turns(session, database)  # only time will tell...
