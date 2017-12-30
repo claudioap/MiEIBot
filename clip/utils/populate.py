@@ -5,7 +5,7 @@ from time import sleep
 from threading import Lock
 
 from clip import urls, Session, Database
-from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance, crawl_classes
+from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance, crawl_classes, crawl_admissions
 from clip.entities import Institution, Department, Course, Student, Admission
 from clip.utils import parse_clean_request
 
@@ -48,7 +48,7 @@ def departments(session: Session, database: Database):
 
         # Find the departments that existed under each year
         for year in range(institution.initial_year, institution.last_year + 1):
-            print("Crawling departments of institution {}. Year:{}".format(institution, year))
+            log.info("Crawling departments of institution {}. Year:{}".format(institution, year))
             hierarchy = parse_clean_request(session.get(urls.DEPARTMENTS.format(year, institution.identifier)))
             department_links = hierarchy.find_all(href=department_exp)
             for department_link in department_links:
@@ -68,7 +68,6 @@ def departments(session: Session, database: Database):
                 else:  # insert new
                     department = Department(department_id, department_name, institution, year, year)
                     departments[department_id] = department
-    print("Departments crawled. Database, its up to you!")
     database.add_departments(departments.values())
 
 
@@ -80,14 +79,10 @@ def classes(session: Session, database: Database):
     threads = []
     for thread in range(0, THREADS):
         threads.append(
-            PageCrawler(
-                "Thread-" + str(thread),
-                session,
-                database,
-                department_queue,
-                department_lock,
-                crawl_classes
-            ))
+            PageCrawler("Thread-" + str(thread),
+                        session, database,
+                        department_queue, department_lock, crawl_classes
+                        ))
         threads[thread].start()
 
     while True:
@@ -96,9 +91,7 @@ def classes(session: Session, database: Database):
             department_lock.release()
             break
         else:
-            print(
-                "{} departments remaining!".format(
-                    department_queue.qsize()))
+            log.info("{} departments remaining!".format(department_queue.qsize()))
             department_lock.release()
             sleep(5)
 
@@ -147,57 +140,45 @@ def courses(session: Session, database: Database):
 
 
 # populate student list from the national access contest (also obtain their preferences and current status)
-def nac_admissions(session: Session, database: Database):  # TODO threading (rework the database to save states apart)
-    admissions = []
-    course_exp = re.compile("\\bcurso=(\d+)$")
+def nac_admissions(session: Session, database: Database):
+    # TODO rework the database to save states apart
+    # TODO since the vast, VAST majority of clip students are from only one institution, change the implementation
+    # to have threads crawling each year instead of each institution.
+    # Since this only has to be run once at every trimester guess its not top priority
+
+    institution_queue = Queue()
     for institution in database.institutions.values():
         if not institution.has_time_range():  # if it has no time range to iterate through
             continue
-        years = range(institution.initial_year, institution.last_year + 1)
-        for year in years:
-            courses = set()
-            hierarchy = parse_clean_request(session.get(urls.ADMISSIONS.format(year, institution.identifier)))
-            course_links = hierarchy.find_all(href=course_exp)
-            for course_link in course_links:  # find every course that had students that year
-                courses.add(course_exp.findall(course_link.attrs['href'])[0])
+        institution_queue.put(institution)
 
-            for course_id in courses:
-                course = database.courses[course_id]
-                for phase in range(1, 4):  # for every of the three phases
-                    hierarchy = parse_clean_request(
-                        session.get(urls.ADMITTED.format(year, institution.identifier, phase, course_id)))
-                    # find the table structure containing the data (only one with those attributes)
-                    table_root = hierarchy.find('th', colspan="8", bgcolor="#95AEA8").parent.parent
+    institution_queue_lock = Lock()
 
-                    for tag in table_root.find_all('th'):  # for every table header
-                        if tag.parent is not None:
-                            tag.parent.decompose()  # remove its parent row
+    threads = []
+    for thread in range(0, THREADS):
+        threads.append(
+            PageCrawler(
+                "Thread-" + str(thread),
+                session,
+                database,
+                institution_queue,
+                institution_queue_lock,
+                crawl_admissions
+            ))
+        threads[thread].start()
 
-                    table_rows = table_root.find_all('tr')
-                    for table_row in table_rows:  # for every student admission
-                        table_row = list(table_row.children)
+    while True:
+        institution_queue_lock.acquire()
+        if institution_queue.empty():
+            institution_queue_lock.release()
+            break
+        else:
+            log.info("Approximately {} institutions remaining".format(institution_queue.qsize()))
+            institution_queue_lock.release()
+            sleep(5)
 
-                        # take useful information
-                        name = table_row[1].text.strip()
-                        option = table_row[9].text.strip()
-                        student_iid = table_row[11].text.strip()
-                        state = table_row[13].text.strip()
-
-                        student_iid = student_iid if student_iid != '' else None
-                        option = None if option == '' else int(option)
-                        state = state if state != '' else None
-
-                        student = None
-
-                        if student_iid is not None:  # if the student has an id add him/her to the database
-                            student = database.add_student(
-                                Student(student_iid, name, course=course, institution=institution))
-
-                        name = name if student is None else None
-                        admission = Admission(student, name, course, phase, year, option, state)
-                        print("Found admission: {}".format(admission))
-                        admissions.append(admission)
-        database.add_admissions(admissions)
+    for thread in threads:
+        threads[thread].join()
 
 
 def class_instances(session: Session, database: Database):
@@ -207,14 +188,9 @@ def class_instances(session: Session, database: Database):
     threads = []
     for thread in range(0, THREADS):
         threads.append(
-            PageCrawler(
-                "Thread-" + str(thread),
-                session,
-                database,
-                class_instances_queue,
-                class_instances_lock,
-                crawl_class_instance
-            ))
+            PageCrawler("Thread-" + str(thread),
+                        session, database,
+                        class_instances_queue, class_instances_lock, crawl_class_instance))
         threads[thread].start()
 
     while True:
@@ -223,9 +199,7 @@ def class_instances(session: Session, database: Database):
             class_instances_lock.release()
             break
         else:
-            print(
-                "*DING DING DONG* Your queue has approximately {} class instances remaining".format(
-                    class_instances_queue.qsize()))
+            log.info("Approximately {} class instances remaining".format(class_instances_queue.qsize()))
             class_instances_lock.release()
             sleep(5)
 
@@ -240,14 +214,9 @@ def class_instances_turns(session: Session, database: Database):
     threads = []
     for thread in range(0, THREADS):
         threads.append(
-            PageCrawler(
-                "Thread-" + str(thread),
-                session,
-                database,
-                class_instances_queue,
-                class_instances_lock,
-                crawl_class_turns
-            ))
+            PageCrawler("Thread-" + str(thread),
+                        session, database,
+                        class_instances_queue, class_instances_lock, crawl_class_turns))
         threads[thread].start()
 
     while True:
@@ -256,9 +225,7 @@ def class_instances_turns(session: Session, database: Database):
             class_instances_lock.release()
             break
         else:
-            print(
-                "*DING DING DONG* Your queue has approximately {} class instances remaining".format(
-                    class_instances_queue.qsize()))
+            log.info("Approximately {} class instances remaining".format(class_instances_queue.qsize()))
             class_instances_lock.release()
             sleep(5)
 
@@ -271,6 +238,6 @@ def database_from_scratch(session: Session, database: Database):
     departments(session, database)  # <1 minute
     classes(session, database)  # ~10 minutes
     courses(session, database)  # ~5 minutes
-    nac_admissions(session, database)  # ~20 minutes (probably <5 after threaded implementation w/8 threads)
+    nac_admissions(session, database)  # ~20 minutes
     class_instances(session, database)  # ~1 hour
     class_instances_turns(session, database)  # ?

@@ -1,3 +1,4 @@
+import logging
 from queue import Queue
 from threading import Thread, Lock
 from unicodedata import normalize
@@ -5,8 +6,11 @@ from unicodedata import normalize
 import re
 
 from clip import urls, Database, Session
-from clip.entities import ClassInstance, Class, Enrollment, Department, Student, Turn, TurnInstance
+from clip.entities import ClassInstance, Class, Enrollment, Department, Student, Turn, TurnInstance, Admission, \
+    Institution
 from clip.utils import parse_clean_request, abbreviation_to_course, weekday_to_id
+
+log = logging.getLogger(__name__)
 
 
 class PageCrawler(Thread):
@@ -74,6 +78,56 @@ def crawl_classes(session: Session, database: Database, department: Department):
     database.add_class_instances(class_instances)
 
 
+def crawl_admissions(session: Session, database: Database, institution: Institution):
+    admissions = []
+    course_exp = re.compile("\\bcurso=(\d+)$")
+    years = range(institution.initial_year, institution.last_year + 1)
+    for year in years:
+        courses = set()
+        hierarchy = parse_clean_request(session.get(urls.ADMISSIONS.format(year, institution.identifier)))
+        course_links = hierarchy.find_all(href=course_exp)
+        for course_link in course_links:  # find every course that had students that year
+            courses.add(course_exp.findall(course_link.attrs['href'])[0])
+
+        for course_id in courses:
+            course = database.courses[course_id]
+            for phase in range(1, 4):  # for every of the three phases
+                hierarchy = parse_clean_request(
+                    session.get(urls.ADMITTED.format(year, institution.identifier, phase, course_id)))
+                # find the table structure containing the data (only one with those attributes)
+                table_root = hierarchy.find('th', colspan="8", bgcolor="#95AEA8").parent.parent
+
+                for tag in table_root.find_all('th'):  # for every table header
+                    if tag.parent is not None:
+                        tag.parent.decompose()  # remove its parent row
+
+                table_rows = table_root.find_all('tr')
+                for table_row in table_rows:  # for every student admission
+                    table_row = list(table_row.children)
+
+                    # take useful information
+                    name = table_row[1].text.strip()
+                    option = table_row[9].text.strip()
+                    student_iid = table_row[11].text.strip()
+                    state = table_row[13].text.strip()
+
+                    student_iid = student_iid if student_iid != '' else None
+                    option = None if option == '' else int(option)
+                    state = state if state != '' else None
+
+                    student = None
+
+                    if student_iid is not None:  # if the student has an id add him/her to the database
+                        student = database.add_student(
+                            Student(student_iid, name, course=course, institution=institution))
+
+                    name = name if student is None else None
+                    admission = Admission(student, name, course, phase, year, option, state)
+                    log.debug("Found admission: {}".format(admission))
+                    admissions.append(admission)
+    database.add_admissions(admissions)
+
+
 def crawl_class_instance(session: Session, database: Database, class_instance: ClassInstance):
     institution = class_instance.parent_class.department.institution
 
@@ -91,7 +145,7 @@ def crawl_class_instance(session: Session, database: Database, class_instance: C
     for line in content:  # for every student enrollment
         information = line.split('\t')
         if len(information) != 7:
-            print("Invalid line")
+            log.warning("Invalid line")
             continue
         # take useful information
         student_statutes = information[0].strip()
@@ -112,7 +166,7 @@ def crawl_class_instance(session: Session, database: Database, class_instance: C
 
         enrollment = Enrollment(student, class_instance, attempt, student_year, student_statutes, observation)
         enrollments.append(enrollment)
-        print("Enrollment found: {}".format(enrollment))
+        log.debug("Enrollment found: {}".format(enrollment))
 
     database.add_enrollments(enrollments)
 

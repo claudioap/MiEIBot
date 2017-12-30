@@ -216,7 +216,7 @@ class Database:
             self.lock.release()
 
         if len(institutions) > 0:
-            print("{} institutions added successfully!".format(len(institutions)))
+            log.info("{} institutions added successfully!".format(len(institutions)))
 
         self.__load_institutions__()
 
@@ -234,7 +234,7 @@ class Database:
                 # creation date different or  last year different
                 if department.initial_year != stored_department.initial_year \
                         or department.last_year != stored_department.last_year:
-                    print("Updating department from:'{}' to:'{}'".format(stored_department, department))
+                    log.info("Updating department from:'{}' to:'{}'".format(stored_department, department))
                     self.lock.acquire()
                     try:
                         self.cursor.execute(
@@ -247,7 +247,7 @@ class Database:
                         self.lock.release()
 
             if not exists:  # unknown department, add it to the DB
-                print("Adding department {}".format(department))
+                log.info("Adding department {}".format(department))
                 self.lock.acquire()
                 try:
                     self.cursor.execute(
@@ -265,7 +265,7 @@ class Database:
             self.lock.release()
 
         if len(departments) > 0:
-            print("{} departments added successfully!".format(len(departments)))
+            log.info("{} departments added successfully!".format(len(departments)))
         self.__load_departments__()
 
     def add_class(self, class_: Class, commit=False) -> Class:
@@ -291,7 +291,7 @@ class Database:
                     stored_class_name, class_.name, class_.identifier
                 ))
             else:
-                print("Already known: {}".format(class_))  # TODO Proper logging
+                log.debug("Already known: {}".format(class_))  # TODO Proper logging
                 class_.db_id = stored_class[0]
                 if commit:
                     self.lock.acquire()
@@ -305,7 +305,7 @@ class Database:
         # class isn't stored yet
         self.lock.acquire()
         try:
-            print("Adding class {}".format(class_))
+            log.info("Adding class {}".format(class_))
             self.cursor.execute('INSERT INTO Classes(internal_id, name, department) '
                                 'VALUES (?, ?, ?)',
                                 (class_.identifier, class_.name, department.db_id))
@@ -343,7 +343,7 @@ class Database:
                         break
 
                 if not exists:  # unknown class instance, add it to the DB
-                    print("Adding instance of {}".format(instance))
+                    log.info("Adding instance of {}".format(instance))
                     self.cursor.execute('INSERT INTO ClassInstances(class, period, year) '
                                         'VALUES (?, ?, ?)',
                                         (instance.parent_class.db_id, instance.period.db_id, instance.year))
@@ -357,7 +357,7 @@ class Database:
             self.lock.release()
 
         if len(instances) > 0:
-            print("{} class instances added successfully!".format(len(instances)))
+            log.info("{} class instances added successfully!".format(len(instances)))
 
     def add_courses(self, courses):
         for course in courses:
@@ -399,7 +399,7 @@ class Database:
                     different_degree = True
 
             if not exists:  # unknown department, add it to the DB
-                print("Adding course: {}".format(course))
+                log.info("Adding course: {}".format(course))
                 self.lock.acquire()
                 try:
                     self.cursor.execute(
@@ -413,7 +413,7 @@ class Database:
 
             if different_time:  # update running date
                 if course.initial_year is not None and course.last_year is not None:
-                    print("Updating course {}({}) (now goes from {} to {})".format(
+                    log.info("Updating course {}({}) (now goes from {} to {})".format(
                         course.name, course.identifier, course.initial_year, course.last_year))
                     self.lock.acquire()
                     try:
@@ -430,7 +430,7 @@ class Database:
 
             if different_abbreviation:  # update abbreviation
                 if course.abbreviation is not None:
-                    print("Updating course {}({}) abbreviation to {}".format(
+                    log.info("Updating course {}({}) abbreviation to {}".format(
                         course.name, course.identifier, course.abbreviation))
                     self.lock.acquire()
                     try:
@@ -444,7 +444,7 @@ class Database:
 
             if different_degree:  # update degree
                 if course.degree is not None:
-                    print("Updating course {}({}) degree to {}".format(
+                    log.info("Updating course {}({}) degree to {}".format(
                         course.name, course.identifier, course.degree))
                     self.lock.acquire()
                     try:
@@ -459,9 +459,10 @@ class Database:
         self.lock.acquire()
         try:
             self.link.commit()
-            print("Courses added successfully!")
         finally:
             self.lock.release()
+        if len(courses) > 0:
+            log.info("{} courses added successfully!".format(len(courses)))
         self.__load_courses__()
 
     # adds/updates the student information. Returns student id. DOES NOT COMMIT BY DEFAULT
@@ -500,7 +501,7 @@ class Database:
                                     'VALUES (?, ?, ?, ?, ?)',
                                     (student.name, student.identifier, student.abbreviation,
                                      course_db_id, institution_id))
-                print("New student saved: {})".format(student))  # TODO proper logging
+                log.info("New student saved: {})".format(student))
             finally:
                 self.lock.release()
         elif len(matching_students) == 1:
@@ -529,7 +530,7 @@ class Database:
                                         "SET abbreviation=?, institution=?, course=? "
                                         "WHERE id=?",
                                         (new_abbr, new_institution, new_course, stored_id))
-                    print("Updated student info: {}".format(student))  # TODO proper logging
+                    log.info("Updated student info: {}".format(student))  # TODO proper logging
                     if commit:
                         self.link.commit()
                 finally:
@@ -716,7 +717,7 @@ class Database:
             self.lock.release()
 
         if len(admissions) > 0:
-            print("{} admissions added successfully!".format(len(admissions)))
+            log.info("{} admissions added successfully!".format(len(admissions)))
 
     def add_enrollments(self, enrollments):
         self.lock.acquire()
