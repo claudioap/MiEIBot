@@ -178,19 +178,47 @@ class Enrollment:
 
 
 class Building:
-    def __init__(self, name: str, db_id=None):
+    def __init__(self, name: str, institution: Institution, db_id=None):
         self.name = name
+        self.institution = institution
         self.db_id = db_id
+
+    def __str__(self):
+        return "{}, {} (DB: {})".format(self.name, self.institution.name, self.db_id)
+
+    def __hash__(self):
+        return hash(self.name) + hash(self.institution.identifier)
+
+    def __eq__(self, other):
+        if isinstance(self, other.__class__):
+            if self.db_id is None or other.db_id is None:  # if there is no DB id
+                return self.name == other.name and self.institution == other.institution
+            else:  # otherwise always compare using DB ids
+                return self.db_id == other.db_id
+        return False
 
 
 class Classroom(IdentifiedEntity):
-    def __init__(self, number, building: Building, db_id=None):
-        super().__init__(number, db_id)
+    def __init__(self, name, building: Building, db_id=None):
+        super().__init__(name, db_id)
         self.building = building
+
+    def __str__(self):
+        return "{}, {} (DB: {})".format(self.identifier, self.building.name, self.db_id)
+
+
+class TurnType:
+    def __init__(self, type, abbreviation, db_id=None):
+        self.type = type
+        self.abbreviation = abbreviation
+        self.db_id = db_id
+
+    def __str__(self):
+        return self.type
 
 
 class Turn:
-    def __init__(self, class_instance: ClassInstance, number: int, turn_type, enrolled: int, capacity: int,
+    def __init__(self, class_instance: ClassInstance, number: int, turn_type: TurnType, enrolled: int, capacity: int,
                  hours=None, routes=None, restrictions=None, state=None, teachers=list(), db_id=None):
         self.class_instance = class_instance
         self.number = number

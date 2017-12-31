@@ -5,7 +5,8 @@ import os
 import re
 from queue import Queue
 
-from clip.entities import Institution, Department, Course, Period, ClassInstance, Class, Student, Turn, Degree
+from clip.entities import Institution, Department, Course, Period, ClassInstance, Class, Student, Turn, Degree, \
+    Classroom, Building, TurnType
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +30,10 @@ class Database:
         self.courses = {}  # [clip_id] -> Course
         self.course_abbreviations = {}  # [abbr] -> Course
         self.weekdays = {}  # [portuguese_name] -> internal_id
-        self.turn_types = {}  # [abbr] -> db_id
+        self.turn_types = {}  # [abbr] -> TurnType
         self.teachers = {}  # [name] -> db_id
+        self.buildings = {}  # [name] -> Building
+        self.classrooms = {}  # [building][classroom name] -> Classroom
 
         # partial caches (built as requests are made)
         self.class_id_cache = {}  # TODO check if this cannot be removed and the bellow cache used instead
@@ -48,6 +51,8 @@ class Database:
         self.__load_weekdays__()
         self.__load_turn_types__()
         self.__load_teachers__()
+        self.__load_buildings__()
+        self.__load_classrooms__()
         log.debug("Finished building cache")
 
     def __load_institutions__(self):
@@ -157,7 +162,8 @@ class Database:
             self.cursor.execute('SELECT abbr, id, type '
                                 'FROM TurnTypes')
             for turn_type in self.cursor:
-                turn_types[turn_type[0]] = {'id': turn_type[1], 'name': turn_type[2]}
+                turn_types[turn_type[0]] = TurnType(turn_type[2], turn_type[0], db_id=turn_type[1])
+                turn_types[turn_type[0]] = TurnType(turn_type[2], turn_type[0], db_id=turn_type[1])
         finally:
             self.lock.release()
         self.turn_types = turn_types
@@ -174,6 +180,38 @@ class Database:
         finally:
             self.lock.release()
         self.teachers = teachers
+
+    def __load_buildings__(self):
+        log.debug("Building building cache")
+        buildings = {}
+        self.lock.acquire()
+        try:
+            self.cursor.execute('SELECT Buildings.id, Buildings.name, Institutions.internal_id '
+                                'FROM Buildings '
+                                'JOIN Institutions ON Buildings.institution = Institutions.id')
+            for building in self.cursor:
+                buildings[building[1]] = Building(building[1], self.institutions[building[2]], db_id=building[0])
+        finally:
+            self.lock.release()
+        self.buildings = buildings
+
+    def __load_classrooms__(self):
+        log.debug("Building classroom cache")
+        classrooms = {}
+        self.lock.acquire()
+        try:
+            self.cursor.execute('SELECT Classrooms.name, Buildings.name, Classrooms.id '
+                                'FROM Classrooms '
+                                'JOIN Buildings ON Buildings.id = Classrooms.building')
+            for classroom in self.cursor:
+                building = self.buildings[classroom[1]]
+                if building.name not in classrooms:
+                    classrooms[building] = {}
+                classroom_obj = Classroom(classroom[1], building, db_id=classroom[0])
+                classrooms[building][classroom[0]] = classroom_obj
+        finally:
+            self.lock.release()
+        self.classrooms = classrooms
 
     def add_institutions(self, institutions):  # bulk addition to avoid pointless cache reloads
         self.lock.acquire()
@@ -291,7 +329,7 @@ class Database:
                     stored_class_name, class_.name, class_.identifier
                 ))
             else:
-                log.debug("Already known: {}".format(class_))  # TODO Proper logging
+                log.debug("Already known: {}".format(class_))
                 class_.db_id = stored_class[0]
                 if commit:
                     self.lock.acquire()
@@ -326,7 +364,6 @@ class Database:
             self.lock.release()
 
     def add_class_instances(self, instances):
-        # add class instance to the database
         for instance in instances:
             self.lock.acquire()
             try:
@@ -520,7 +557,7 @@ class Database:
                                         "SET abbreviation=?, institution=?, course=? "
                                         "WHERE id=?",
                                         (new_abbr, new_institution, new_course, stored_id))
-                    log.info("Updated student info: {}".format(student))  # TODO proper logging
+                    log.info("Updated student info: {}".format(student))
                     if commit:
                         self.link.commit()
                     student.db_id = stored_id
@@ -538,105 +575,121 @@ class Database:
         finally:
             self.lock.release()
 
-    def add_turn(self, turn: Turn, commit=False):
+    def add_turn(self, turn: Turn, commit=False) -> Turn:
+        self.lock.acquire()
         try:
+            new = False
+            # check if it exists
             self.cursor.execute(
-                'SELECT id, restrictions, hours, enrolled, capacity, routes, state '
+                'SELECT 1 '
                 'FROM Turns '
-                'WHERE class_instance=? AND number=? AND type=?')
+                'WHERE class_instance=? AND number=? AND type=?',
+                (turn.class_instance.db_id, turn.number, turn.type.db_id))
+
             turns = self.cursor.fetchall()
 
-            type_id = self.turn_types[turn.type]
-
             if len(turns) > 1:
-                raise Exception("We've got a consistency problem... Turn {} \nMatches:{}".format(turn, str(turns)))
+                raise Exception("We've got a consistency problem... Turn {}\nMatches:{}".format(turn, str(turns)))
 
-            if len(turns) == 0:
+            if len(turns) == 0:  # create it if it doesn't
                 self.cursor.execute(
                     'INSERT INTO Turns'
                     '(class_instance, number, type, restrictions, hours, enrolled, routes, capacity, state) '
                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (turn.class_instance.db_id, turn.number, type_id, turn.restrictions,
+                    (turn.class_instance.db_id, turn.number, turn.type.db_id, turn.restrictions,
                      turn.hours, turn.enrolled, turn.routes, turn.capacity, turn.state))
-        finally:
-            self.lock.release()
+                new = True
 
-        old_turn_info = turns[0]
-        new_turn = Turn(turn.class_instance, turn.number, turn.type, old_turn_info[3], old_turn_info[4],
-                        hours=old_turn_info[2], routes=old_turn_info[5], state=old_turn_info[6], db_id=old_turn_info[0])
-        del old_turn_info
+            self.cursor.execute(
+                'SELECT id, restrictions, hours, enrolled, capacity, routes, state '
+                'FROM Turns '
+                'WHERE class_instance=? AND number=? AND type=?',
+                (turn.class_instance.db_id, turn.number, turn.type.db_id))
 
-        different = False
+            turns = self.cursor.fetchall()
 
-        if turn.restrictions is not None and turn.restrictions is not '':
-            new_turn.restrictions = turn.restrictions
-            different = True
-
-        if turn.hours is not None:
-            new_turn.hours = turn.hours
-            different = True
-
-        if turn.enrolled is not None:
-            new_turn.enrolled = turn.enrolled
-            different = True
-
-        if turn.capacity is not None:
-            new_turn.capacity = turn.capacity
-            different = True
-
-        if turn.routes is not None:
-            new_turn.routes = turn.routes
-            different = True
-
-        if turn.state is not None:
-            new_turn.state = turn.state
-            different = True
-
-        if different:
-            self.lock.acquire()
-            try:
+            if new:
+                updated_turn = turn
+                # find turn db_id
                 self.cursor.execute(
-                    'UPDATE Turns '
-                    'SET restrictions=?, hours=?, enrolled=?, capacity=?, routes=?, state=? '
-                    'WHERE id=?',
-                    (new_turn.restrictions, new_turn.hours, new_turn.enrolled, new_turn.capacity,
-                     new_turn.routes, new_turn.state, new_turn.db_id))
-            finally:
-                self.lock.release()
+                    'SELECT id '
+                    'FROM Turns '
+                    'WHERE class_instance=? AND number=? AND type=?',
+                    (turn.class_instance.db_id, turn.number, turn.type.db_id))
+                updated_turn.db_id = self.cursor.fetchone()[0]
+            else:
+                old_turn_info = turns[0]
+                updated_turn = Turn(turn.class_instance, turn.number, turn.type, old_turn_info[3], old_turn_info[4],
+                                    hours=old_turn_info[2], routes=old_turn_info[5], state=old_turn_info[6],
+                                    db_id=old_turn_info[0])
 
-        for teacher in turn.teachers:
-            if teacher not in self.teachers:
-                self.lock.acquire()
-                try:
+                different = False  # check if it is different from what is stored
+
+                if turn.restrictions is not None and turn.restrictions is not '':
+                    updated_turn.restrictions = turn.restrictions
+                    different = True
+
+                if turn.hours is not None:
+                    updated_turn.hours = turn.hours
+                    different = True
+
+                if turn.enrolled is not None:
+                    updated_turn.enrolled = turn.enrolled
+                    different = True
+
+                if turn.capacity is not None:
+                    updated_turn.capacity = turn.capacity
+                    different = True
+
+                if turn.routes is not None:
+                    updated_turn.routes = turn.routes
+                    different = True
+
+                if turn.state is not None:
+                    updated_turn.state = turn.state
+                    different = True
+
+                if different:
+                    self.cursor.execute(
+                        'UPDATE Turns '
+                        'SET restrictions=?, hours=?, enrolled=?, capacity=?, routes=?, state=? '
+                        'WHERE id=?',
+                        (updated_turn.restrictions, updated_turn.hours, updated_turn.enrolled,
+                         updated_turn.capacity,
+                         updated_turn.routes, updated_turn.state, updated_turn.db_id))
+
+            for teacher in turn.teachers:
+                # add every unknown teacher
+                if teacher not in self.teachers:
                     self.cursor.execute(
                         'INSERT INTO Teachers(name) '
                         'VALUES (?)', (teacher,))
-                finally:
-                    self.lock.release()
-                self.__load_teachers__()  # lock needs to release, otherwise this would wait forever
+        finally:
+            self.lock.release()
+        self.__load_teachers__()  # lock needs to release, otherwise this would wait forever
 
-            self.lock.acquire()
-            try:
+        self.lock.acquire()
+        try:
+            for teacher in turn.teachers:
+                # check if teacher-turn relationship is established
                 self.cursor.execute(
                     'SELECT 1 FROM TurnTeachers '
                     'WHERE turn=? AND teacher=?',
-                    (new_turn.db_id, self.teachers[teacher]))
+                    (updated_turn.db_id, self.teachers[teacher]))
                 if self.cursor.fetchone() is None:
+                    # it isn't, establish it!
                     self.cursor.execute(
                         'INSERT INTO TurnTeachers(turn, teacher) '
                         'VALUES (?, ?)',
-                        (new_turn.db_id, self.teachers[teacher]))
-            finally:
-                self.lock.release()
+                        (updated_turn.db_id, self.teachers[teacher]))
 
-        if commit:
-            self.lock.acquire()
-            try:
+            if commit:
                 self.link.commit()
-            finally:
-                self.lock.release()
 
-        return new_turn
+        finally:
+            self.lock.release()
+
+        return updated_turn
 
     # Reconstructs the instances of a turn , IT'S DESTRUCTIVE!
     def add_turn_instances(self, instances):
@@ -661,7 +714,7 @@ class Database:
         finally:
             self.lock.release()
 
-    def add_turn_students(self, turn_id, students):
+    def add_turn_students(self, turn: Turn, students):
         self.lock.acquire()
         try:
             for student in students:
@@ -669,12 +722,12 @@ class Database:
                     'SELECT 1 '
                     'FROM TurnStudents '
                     'WHERE turn=? AND student=?',
-                    (turn_id, student))
+                    (turn.db_id, student.db_id))
                 if self.cursor.fetchone() is None:
                     self.cursor.execute(
                         'INSERT INTO TurnStudents(turn, student) '
                         'VALUES (?, ?)',
-                        (turn_id, student))
+                        (turn.db_id, student.db_id))
             self.link.commit()
         finally:
             self.lock.release()
@@ -714,8 +767,6 @@ class Database:
                          enrollment.student_year, enrollment.statutes, enrollment.observation))
                 except sqlite3.Error:
                     log.warning("Enrollment skipped {}".format(enrollment))
-                except Exception:
-                    print("Hey hey hey")
         finally:
             self.lock.release()
         self.lock.acquire()
@@ -723,6 +774,88 @@ class Database:
             self.link.commit()
         finally:
             self.lock.release()
+
+    def add_classroom(self, classroom: Classroom, commit=False) -> Classroom:
+        if classroom.building.name not in self.buildings:
+            raise Exception("Unknown building")
+
+        building = self.buildings[classroom.building.name]
+
+        self.lock.acquire()
+        try:
+            self.cursor.execute('SELECT id '
+                                'FROM Classrooms '
+                                'WHERE name=? AND building=?',
+                                (classroom.identifier, building.db_id))
+            stored_classrooms = self.cursor.fetchall()
+
+            for stored_classroom in stored_classrooms:
+                classroom.db_id = stored_classroom[0]
+                log.debug("Already known: {}".format(classroom))
+                if commit:
+                    self.link.commit()
+
+                return classroom
+
+            log.info("Adding classroom {}".format(classroom))
+            self.cursor.execute('INSERT INTO Classrooms(name, building) '
+                                'VALUES (?, ?)',
+                                (classroom.identifier, building.db_id))
+
+            # fetch the new id
+            self.cursor.execute('SELECT id '
+                                'FROM Classrooms '
+                                'WHERE name=? AND building=?',
+                                (classroom.identifier, building.db_id))
+
+            classroom.db_id = self.cursor.fetchone()[0]
+
+            if commit:
+                self.link.commit()
+        finally:
+            self.lock.release()
+
+        self.__load_classrooms__()
+        return classroom
+
+    def add_building(self, building: Building, commit=False) -> Building:
+        self.lock.acquire()
+        try:
+            self.cursor.execute('SELECT id '
+                                'FROM Buildings '
+                                'WHERE name=? AND institution=?',
+                                (building.name, building.institution.db_id))
+            stored_buildings = self.cursor.fetchall()
+
+            for stored_building in stored_buildings:
+                db_id = stored_building[0]
+                log.debug("Already known: {}".format(building))
+                building.db_id = db_id
+                if commit:
+                    self.link.commit()
+
+                return building
+
+            log.info("Adding building {}".format(building))
+            self.cursor.execute('INSERT INTO Buildings(name, institution) '
+                                'VALUES (?, ?)',
+                                (building.name, building.institution.db_id))
+
+            self.cursor.execute('SELECT id '
+                                'FROM Buildings '
+                                'WHERE name=? AND institution=?',
+                                (building.name, building.institution.db_id))
+
+            result = self.cursor.fetchone()
+            building.db_id = result[0]
+
+            if commit:
+                self.link.commit()
+        finally:
+            self.lock.release()
+
+        self.__load_buildings__()
+        return building
 
     def fetch_class_instances(self, year_asc=True, queue=False):
         class_instances = []

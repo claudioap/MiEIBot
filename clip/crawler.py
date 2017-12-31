@@ -7,7 +7,7 @@ import re
 
 from clip import urls, Database, Session
 from clip.entities import ClassInstance, Class, Enrollment, Department, Student, Turn, TurnInstance, Admission, \
-    Institution
+    Institution, Classroom, Building
 from clip.utils import parse_clean_request, abbreviation_to_course, weekday_to_id
 
 log = logging.getLogger(__name__)
@@ -186,12 +186,11 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
     turn_link_exp = re.compile("\\b&tipo=(?P<type>\\w)+&n%BA=(?P<number>\\d+)\\b")
     schedule_exp = re.compile(  # extract turn information
         '(?P<weekday>[\\w-]+) {2}'
-        '(?P<init_hour>\\d{2}):(?P<init_min>\\d{2}) - (?P<end_hour>\\d{2}):(?P<end_min>\\d{2}) {2}'
-        '(?:Ed (?P<building>[\\w\\b]{1,2}): (?P<room>(?:\\w* )?[\\w\\b.]{1,15})/.*'
-        '|Ed: [\\w\\d.]+/(?P<alt_building>[\\w\\d. ]+))',
-        re.UNICODE)
+        '(?P<init_hour>\\d{2}):(?P<init_min>\\d{2}) - (?P<end_hour>\\d{2}):(?P<end_min>\\d{2})(?: {2})?'
+        '(?:Ed .*: (?P<room>[\\w\\b. ]+)/(?P<building>[\\w\\d. ]+))?')
 
     turn_links = hierarchy.find_all(href=turn_link_exp)
+    # FIXME when there is only one turn, the received page is the turn itself. [Crawling cannot be done without this]
 
     for turn_link in turn_links:  # for every turn in this class instance
         instances = []
@@ -246,10 +245,15 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
 
                     building = information.group('building')
                     room = information.group('room')
-                    building = building if building is not None else information.group('alt_building')
 
                     # TODO fix that classroom thingy, also figure a way to create the turn before its instances
-                    instances.append(TurnInstance(None, start, end, weekday, classroom=room + '|' + building))
+                    if building is not None:
+                        building = database.add_building(Building(building.strip(), institution))
+                        if room is not None:  # if there is a room, use it
+                            room = database.add_classroom(Classroom(room.strip(), building))
+                        else:  # use building as room name
+                            room = database.add_classroom(Classroom(building.name, building))
+                    instances.append(TurnInstance(None, start, end, weekday, classroom=room))
             elif field == "turno":
                 pass
             elif "percursos" in field:
@@ -280,18 +284,26 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
         student_rows = student_table_root.find_all('tr')
 
         for student_row in student_rows:
-            student_name = student_row.contents[0].text.strip()
-            student_iid = student_row.contents[3].text.strip()
-            student_abbr = student_row.contents[5].text.strip()
-            course_abbr = student_row.contents[7].text.strip()
-            course_iid = abbreviation_to_course(database, course_abbr)
+            student_name = student_row.contents[1].text.strip()
+            student_id = student_row.contents[3].text.strip()
+            student_abbreviation = student_row.contents[5].text.strip()
+            course_abbreviation = student_row.contents[7].text.strip()
+            course = abbreviation_to_course(database, course_abbreviation)
 
             # make sure he/she is in the db and have his/her db id
-            student_id = database.add_student_info(student_iid, student_name, course=course_iid, abbr=student_abbr)
-            students.append(student_id)
+            student = database.add_student(Student(student_id, student_name, student_abbreviation, course=course))
+            students.append(student)
 
-        turn = Turn(class_instance, turn_number, turn_type, enrolled, capacity,
-                    hours=weekly_hours, routes=routes, restrictions=restrictions, state=state)
+        routes_str = None
+        for route in routes:
+            if routes_str is None:
+                routes_str = route
+            else:
+                routes_str += (';' + route)
+
+        turn = Turn(
+            class_instance, turn_number, database.turn_types[turn_type], enrolled, capacity,
+            hours=weekly_hours, routes=routes_str, restrictions=restrictions, state=state, teachers=teachers)
         turn = database.add_turn(turn)
         for instance in instances:
             instance.turn = turn

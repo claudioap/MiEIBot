@@ -43,9 +43,11 @@ CREATE TABLE IF NOT EXISTS `Institutions` (
   `last_year`    INTEGER
 );
 
+
 CREATE TABLE IF NOT EXISTS "Buildings" (
-  `id`   INTEGER,
-  `name` INTEGER
+  `id`          INTEGER PRIMARY KEY AUTOINCREMENT,
+  `name`        TEXT NOT NULL,
+  `institution` INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS "Weekdays" (

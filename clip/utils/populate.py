@@ -6,10 +6,10 @@ from threading import Lock
 
 from clip import urls, Session, Database
 from clip.crawler import PageCrawler, crawl_class_turns, crawl_class_instance, crawl_classes, crawl_admissions
-from clip.entities import Institution, Department, Course, Student, Admission
+from clip.entities import Institution, Department, Course
 from clip.utils import parse_clean_request
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 THREADS = 8  # high number means "Murder CLIP!", take care
 
@@ -178,7 +178,7 @@ def nac_admissions(session: Session, database: Database):
             sleep(5)
 
     for thread in threads:
-        threads[thread].join()
+        thread.join()
 
 
 def class_instances(session: Session, database: Database):
@@ -204,7 +204,7 @@ def class_instances(session: Session, database: Database):
             sleep(5)
 
     for thread in threads:
-        threads[thread].join()
+        thread.join()
 
 
 def class_instances_turns(session: Session, database: Database):
@@ -230,7 +230,7 @@ def class_instances_turns(session: Session, database: Database):
             sleep(5)
 
     for thread in threads:
-        threads[thread].join()
+        thread.join()
 
 
 def database_from_scratch(session: Session, database: Database):
