@@ -190,9 +190,43 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
         '(?:Ed .*: (?P<room>[\\w\\b. ]+)/(?P<building>[\\w\\d. ]+))?')
 
     turn_links = hierarchy.find_all(href=turn_link_exp)
-    # FIXME when there is only one turn, the received page is the turn itself. [Crawling cannot be done without this]
 
-    for turn_link in turn_links:  # for every turn in this class instance
+    # When there is only one turn, the received page is the turn itself.
+    single_turn = False
+    turn_count = 0  # consistency check
+
+    turn_type = None
+    turn_number = None
+
+    for turn_link in turn_links:
+        if "aux=ficheiro" in turn_link.attrs['href'].lower():
+            # there are no file links in turn lists, but they do exist on turn pages
+            single_turn = True
+        else:
+            turn_count += 1
+            turn_link_expression = turn_link_exp.search(turn_link.attrs['href'])
+            turn_type = turn_link_expression.group("type")
+            turn_number = int(turn_link_expression.group("number"))
+
+    turn_pages = []  # pages for turn parsing
+    if single_turn:  # if the loaded page is the only turn
+        if turn_count > 1:
+            raise Exception("Too many turns for a single turn...")
+        if turn_count == 0:
+            log.warning("Turn page without any turn. Skipping")
+            return
+        turn_pages.append((hierarchy, turn_type, turn_number))  # save it, avoid requesting it again
+    else:  # if there are multiple turns then request them
+        for turn_link in turn_links:
+            turn_page = parse_clean_request(session.get(urls.ROOT + turn_link.attrs['href']))
+            turn_link_expression = turn_link_exp.search(turn_link.attrs['href'])
+            turn_type = turn_link_expression.group("type")
+            turn_number = int(turn_link_expression.group("number"))
+            turn_pages.append((turn_page, turn_type, turn_number))  # and save them with their metadata
+
+    del hierarchy
+
+    for page in turn_pages:  # for every turn in this class instance
         instances = []
         routes = []
         teachers = []
@@ -203,15 +237,8 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
         capacity = None
         students = []
 
-        turn_link_expression = turn_link_exp.search(turn_link.attrs['href'])
-        turn_type = turn_link_expression.group("type")
-        turn_number = int(turn_link_expression.group("number"))
-        del turn_link_expression
-
-        hierarchy = parse_clean_request(session.get(urls.ROOT + turn_link.attrs['href']))  # fetch turn
-
         # turn information table
-        info_table_root = hierarchy.find('th', colspan="2", bgcolor="#aaaaaa").parent.parent
+        info_table_root = page[0].find('th', colspan="2", bgcolor="#aaaaaa").parent.parent
 
         for tag in info_table_root.find_all('th'):  # for every table header
             if tag.parent is not None:
@@ -275,7 +302,7 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
                 raise Exception("Unknown field " + field)
         del fields
 
-        student_table_root = hierarchy.find('th', colspan="4", bgcolor="#95AEA8").parent.parent
+        student_table_root = page[0].find('th', colspan="4", bgcolor="#95AEA8").parent.parent
 
         for tag in student_table_root.find_all('th'):  # for every table header
             if tag.parent is not None:
@@ -288,7 +315,7 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
             student_id = student_row.contents[3].text.strip()
             student_abbreviation = student_row.contents[5].text.strip()
             course_abbreviation = student_row.contents[7].text.strip()
-            course = abbreviation_to_course(database, course_abbreviation)
+            course = abbreviation_to_course(database, course_abbreviation, year=class_instance.year)
 
             # make sure he/she is in the db and have his/her db id
             student = database.add_student(Student(student_id, student_name, student_abbreviation, course=course))
@@ -302,7 +329,7 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
                 routes_str += (';' + route)
 
         turn = Turn(
-            class_instance, turn_number, database.turn_types[turn_type], enrolled, capacity,
+            class_instance, page[2], database.turn_types[page[1]], enrolled, capacity,
             hours=weekly_hours, routes=routes_str, restrictions=restrictions, state=state, teachers=teachers)
         turn = database.add_turn(turn)
         for instance in instances:
