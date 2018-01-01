@@ -36,7 +36,6 @@ class Database:
         self.classrooms = {}  # [building][classroom name] -> Classroom
 
         # partial caches (built as requests are made)
-        self.class_id_cache = {}  # TODO check if this cannot be removed and the bellow cache used instead
         self.class_cache = {}
 
         self.__load_cached_collections__()
@@ -557,7 +556,7 @@ class Database:
                                         "SET abbreviation=?, institution=?, course=? "
                                         "WHERE id=?",
                                         (new_abbr, new_institution, new_course, stored_id))
-                    log.info("Updated student info: {}".format(student))
+                    log.debug("Updated student info: {}".format(student))
                     if commit:
                         self.link.commit()
                     student.db_id = stored_id
@@ -594,14 +593,14 @@ class Database:
             if len(turns) == 0:  # create it if it doesn't
                 self.cursor.execute(
                     'INSERT INTO Turns'
-                    '(class_instance, number, type, restrictions, hours, enrolled, routes, capacity, state) '
+                    '(class_instance, number, type, restrictions, minutes, enrolled, routes, capacity, state) '
                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (turn.class_instance.db_id, turn.number, turn.type.db_id, turn.restrictions,
-                     turn.hours, turn.enrolled, turn.routes, turn.capacity, turn.state))
+                     turn.minutes, turn.enrolled, turn.routes, turn.capacity, turn.state))
                 new = True
 
             self.cursor.execute(
-                'SELECT id, restrictions, hours, enrolled, capacity, routes, state '
+                'SELECT id, restrictions, minutes, enrolled, capacity, routes, state '
                 'FROM Turns '
                 'WHERE class_instance=? AND number=? AND type=?',
                 (turn.class_instance.db_id, turn.number, turn.type.db_id))
@@ -620,7 +619,7 @@ class Database:
             else:
                 old_turn_info = turns[0]
                 updated_turn = Turn(turn.class_instance, turn.number, turn.type, old_turn_info[3], old_turn_info[4],
-                                    hours=old_turn_info[2], routes=old_turn_info[5], state=old_turn_info[6],
+                                    minutes=old_turn_info[2], routes=old_turn_info[5], state=old_turn_info[6],
                                     db_id=old_turn_info[0])
 
                 different = False  # check if it is different from what is stored
@@ -629,8 +628,8 @@ class Database:
                     updated_turn.restrictions = turn.restrictions
                     different = True
 
-                if turn.hours is not None:
-                    updated_turn.hours = turn.hours
+                if turn.minutes is not None:
+                    updated_turn.minutes = turn.minutes
                     different = True
 
                 if turn.enrolled is not None:
@@ -652,9 +651,9 @@ class Database:
                 if different:
                     self.cursor.execute(
                         'UPDATE Turns '
-                        'SET restrictions=?, hours=?, enrolled=?, capacity=?, routes=?, state=? '
+                        'SET restrictions=?, minutes=?, enrolled=?, capacity=?, routes=?, state=? '
                         'WHERE id=?',
-                        (updated_turn.restrictions, updated_turn.hours, updated_turn.enrolled,
+                        (updated_turn.restrictions, updated_turn.minutes, updated_turn.enrolled,
                          updated_turn.capacity,
                          updated_turn.routes, updated_turn.state, updated_turn.db_id))
 
@@ -704,11 +703,10 @@ class Database:
                 'WHERE turn=?', (turn_db_id,))
 
             for instance in instances:
-                # FIXME Classrooms and Buildings
                 self.cursor.execute(
                     'INSERT INTO TurnInstances(turn, start, end, weekday, classroom) '
                     'VALUES (?, ?, ?, ?, ?)',
-                    (turn_db_id, instance.start, instance.end, instance.weekday, None))
+                    (turn_db_id, instance.start, instance.end, instance.weekday, instance.classroom))
 
             self.link.commit()
         finally:
@@ -882,6 +880,8 @@ class Database:
 
             for instance in self.cursor.fetchall():
                 if instance[4] not in self.class_cache:
+                    if len(self.class_cache) > 10000:
+                        self.class_cache.clear()
                     self.class_cache[instance[4]] = Class(
                         instance[4], instance[5], self.departments[instance[6]], db_id=instance[3])
 

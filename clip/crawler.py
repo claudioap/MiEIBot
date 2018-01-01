@@ -231,11 +231,18 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
         routes = []
         teachers = []
         restrictions = None
-        weekly_hours = None
+        weekly_minutes = None
         state = None
         enrolled = None
         capacity = None
         students = []
+        turn_type = None
+
+        # it it is an unknown turn type
+        if page[1] in database.turn_types:
+            turn_type = database.turn_types[page[1]]
+        else:
+            log.error("Unknown turn type: " + page[1])
 
         # turn information table
         info_table_root = page[0].find('th', colspan="2", bgcolor="#aaaaaa").parent.parent
@@ -289,13 +296,19 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
                 for teacher in content:
                     teachers.append(teacher)
             elif "carga" in field:
-                weekly_hours = int(content[0].rstrip(" horas"))
+                weekly_minutes = int(float(content[0].rstrip(" horas")) * 60)
             elif field == "estado":
                 state = content[0]
             elif field == "capacidade":
                 parts = content[0].split('/')
-                enrolled = int(parts[0])
-                capacity = int(parts[1])
+                try:
+                    enrolled = int(parts[0])
+                except ValueError:
+                    log.warning("No enrolled information")
+                try:
+                    capacity = int(parts[1])
+                except ValueError:
+                    log.warning("No capacity information")
             elif field == "restrição":
                 restrictions = content[0]
             else:
@@ -329,8 +342,8 @@ def crawl_class_turns(session: Session, database: Database, class_instance: Clas
                 routes_str += (';' + route)
 
         turn = Turn(
-            class_instance, page[2], database.turn_types[page[1]], enrolled, capacity,
-            hours=weekly_hours, routes=routes_str, restrictions=restrictions, state=state, teachers=teachers)
+            class_instance, page[2], turn_type, enrolled, capacity,
+            minutes=weekly_minutes, routes=routes_str, restrictions=restrictions, state=state, teachers=teachers)
         turn = database.add_turn(turn)
         for instance in instances:
             instance.turn = turn

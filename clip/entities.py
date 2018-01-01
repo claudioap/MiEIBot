@@ -219,13 +219,13 @@ class TurnType:
 
 class Turn:
     def __init__(self, class_instance: ClassInstance, number: int, turn_type: TurnType, enrolled: int, capacity: int,
-                 hours=None, routes=None, restrictions=None, state=None, teachers=list(), db_id=None):
+                 minutes=None, routes=None, restrictions=None, state=None, teachers=list(), db_id=None):
         self.class_instance = class_instance
         self.number = number
         self.type = turn_type
         self.enrolled = enrolled
         self.capacity = capacity
-        self.hours = hours
+        self.minutes = minutes
         self.routes = routes
         self.restrictions = restrictions
         self.state = state
@@ -235,7 +235,7 @@ class Turn:
     def __str__(self):
         return "turn {}.{} of {} {}/{} students, {} hours, {} routes, state={}, teachers={}".format(
             self.type, self.number, self.class_instance, self.enrolled, self.capacity,
-            self.hours, self.routes, self.state, len(self.teachers))
+            self.minutes/60, self.routes, self.state, len(self.teachers))
 
 
 class TurnInstance:

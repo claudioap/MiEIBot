@@ -134,12 +134,12 @@ CREATE TABLE IF NOT EXISTS "Turns" (
   `number`         INTEGER NOT NULL,
   `type`           INTEGER NOT NULL,
   `class_instance` INTEGER NOT NULL,
-  `hours`          INTEGER,
+  `minutes`        INTEGER,
   `enrolled`       INTEGER,
   `capacity`       INTEGER,
   `routes`         TEXT,
   `restrictions`   TEXT,
-  `state`          INTEGER
+  `state`          TEXT
 );
 
 /* Dependencies: Turns, Classrooms */
@@ -189,6 +189,8 @@ INSERT INTO `Weekdays` VALUES (7, 'Sunday', 'Domingo');
 INSERT INTO `TurnTypes` VALUES (1, 't', 'Theoretical');
 INSERT INTO `TurnTypes` VALUES (2, 'p', 'Practical');
 INSERT INTO `TurnTypes` VALUES (3, 'tp', 'Practical-Theoretical');
+INSERT INTO `TurnTypes` VALUES (4, 'ot', 'Tutorial Orientation');
+INSERT INTO `TurnTypes` VALUES (5, 's', 'Seminar');
 
 INSERT INTO `Periods` VALUES (1, 'Yearly', 1, 1, 'a');
 INSERT INTO `Periods` VALUES (2, '1st semester', 1, 2, 's');
