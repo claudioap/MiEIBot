@@ -1,6 +1,7 @@
 import logging
 from queue import Queue
 from threading import Thread, Lock
+from time import sleep
 from unicodedata import normalize
 
 import re
@@ -30,7 +31,14 @@ class PageCrawler(Thread):
             if not self.work_queue.empty():
                 work_unit = self.work_queue.get()
                 self.queue_lock.release()
-                self.crawl_function(self.session, self.database_link, work_unit)
+                done = False
+                while not done:
+                    try:
+                        self.crawl_function(self.session, self.database_link, work_unit)
+                        done = True
+                    except Exception as e:
+                        log.error("Failed to complete the job. Error: {}\nRetrying in 5 seconds...".format(e))
+                        sleep(5)
             else:
                 self.queue_lock.release()
                 break

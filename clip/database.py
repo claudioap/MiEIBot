@@ -703,10 +703,11 @@ class Database:
                 'WHERE turn=?', (turn_db_id,))
 
             for instance in instances:
+                classroom_db_id = None if instance.classroom is None else instance.classroom.db_id
                 self.cursor.execute(
                     'INSERT INTO TurnInstances(turn, start, end, weekday, classroom) '
                     'VALUES (?, ?, ?, ?, ?)',
-                    (turn_db_id, instance.start, instance.end, instance.weekday, instance.classroom))
+                    (turn_db_id, instance.start, instance.end, instance.weekday, classroom_db_id))
 
             self.link.commit()
         finally:
