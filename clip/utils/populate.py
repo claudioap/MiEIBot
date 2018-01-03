@@ -240,4 +240,4 @@ def database_from_scratch(session: Session, database: Database):
     courses(session, database)  # ~5 minutes
     nac_admissions(session, database)  # ~20 minutes
     class_instances(session, database)  # ~4 hours
-    class_instances_turns(session, database)  # only time will tell...
+    class_instances_turns(session, database)  # ~16 Hours and 12GB of RAM

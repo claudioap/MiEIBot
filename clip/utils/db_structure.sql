@@ -12,12 +12,14 @@ CREATE TABLE IF NOT EXISTS "Degrees" (
   `internal_id` TEXT
 );
 
-CREATE TABLE IF NOT EXISTS "Periods" (
+CREATE TABLE IF NOT EXISTS `Periods` (
   `id`          INTEGER,
   `name`        TEXT    NOT NULL,
   `stage`       INTEGER NOT NULL,
   `stages`      INTEGER NOT NULL,
-  `type_letter` TEXT,
+  `type_letter` TEXT    NOT NULL,
+  `start_month` INTEGER,
+  `end_month`   INTEGER,
   PRIMARY KEY (`id`)
 );
 
@@ -192,13 +194,13 @@ INSERT INTO `TurnTypes` VALUES (3, 'tp', 'Practical-Theoretical');
 INSERT INTO `TurnTypes` VALUES (4, 'ot', 'Tutorial Orientation');
 INSERT INTO `TurnTypes` VALUES (5, 's', 'Seminar');
 
-INSERT INTO `Periods` VALUES (1, 'Yearly', 1, 1, 'a');
-INSERT INTO `Periods` VALUES (2, '1st semester', 1, 2, 's');
-INSERT INTO `Periods` VALUES (3, '2nd semester', 2, 2, 's');
-INSERT INTO `Periods` VALUES (4, '1st trimester', 1, 4, 't');
-INSERT INTO `Periods` VALUES (5, '2nd trimester', 2, 4, 't');
-INSERT INTO `Periods` VALUES (6, '3rd trimester', 3, 4, 't');
-INSERT INTO `Periods` VALUES (7, '4th trimester', 4, 4, 't');
+INSERT INTO `Periods` VALUES (1, 'Yearly', 1, 1, 'a', 9, 7);
+INSERT INTO `Periods` VALUES (2, '1st semester', 1, 2, 's', 9, 12);
+INSERT INTO `Periods` VALUES (3, '2nd semester', 2, 2, 's', 3, 7);
+INSERT INTO `Periods` VALUES (4, '1st trimester', 1, 4, 't', 9, 12);
+INSERT INTO `Periods` VALUES (5, '2nd trimester', 2, 4, 't', 1, 3);
+INSERT INTO `Periods` VALUES (6, '3rd trimester', 3, 4, 't', 4, 7);
+INSERT INTO `Periods` VALUES (7, '4th trimester', 4, 4, 't', NULL, NULL);
 
 INSERT INTO `Degrees` VALUES (1, 'Bachelor', 'Licenciatura', 'L');
 INSERT INTO `Degrees` VALUES (2, 'Master', 'Mestrado', 'M');

@@ -69,10 +69,12 @@ class Department(TemporalEntity):
 
 
 class Period:
-    def __init__(self, stage: int, stages: int, letter=None, db_id=None):
+    def __init__(self, stage: int, stages: int, letter=None, start_month=None, end_month=None, db_id=None):
         self.stage = stage
         self.stages = stages
         self.letter = letter
+        self.start_month = start_month
+        self.end_month = end_month
         self.db_id = db_id
 
     def __str__(self):
@@ -235,7 +237,7 @@ class Turn:
     def __str__(self):
         return "turn {}.{} of {} {}/{} students, {} hours, {} routes, state={}, teachers={}".format(
             self.type, self.number, self.class_instance, self.enrolled, self.capacity,
-            self.minutes/60, self.routes, self.state, len(self.teachers))
+            self.minutes / 60, self.routes, self.state, len(self.teachers))
 
 
 class TurnInstance:

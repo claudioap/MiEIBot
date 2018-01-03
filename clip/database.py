@@ -88,13 +88,14 @@ class Database:
         periods = {}
         self.lock.acquire()
         try:
-            self.cursor.execute('SELECT type_letter, stage, stages, id '
+            self.cursor.execute('SELECT type_letter, stage, stages, start_month, end_month ,id '
                                 'FROM Periods')
             for period in self.cursor:
                 if period[0] not in periods:  # unseen letter
                     periods[period[0]] = {}
 
-                periods[period[0]][period[1]] = Period(period[1], period[2], period[0], db_id=period[3])
+                periods[period[0]][period[1]] = Period(
+                    period[1], period[2], period[0], start_month=period[3], end_month=period[4], db_id=period[5])
         finally:
             self.lock.release()
         self.periods = periods
@@ -905,7 +906,7 @@ class Database:
         finally:
             self.lock.release()
 
-    def find_student(self, name):
+    def find_student(self, name, course=None):
         nice_try = escape(name)
         query_string = '%'
         for word in nice_try.split():
@@ -913,9 +914,21 @@ class Database:
 
         self.lock.acquire()
         try:
-            self.cursor.execute("SELECT internal_id, name, abbreviation "
-                                "FROM Students "
-                                "WHERE name LIKE '{}'".format(query_string))
-            return set(self.cursor.fetchall())
+            if course is None:
+                self.cursor.execute("SELECT id, internal_id, name, abbreviation, course "
+                                    "FROM Students "
+                                    "WHERE name LIKE '{}'".format(query_string))
+                matches = list(self.cursor.fetchall())
+            else:
+                self.cursor.execute("SELECT id, internal_id, name, abbreviation, course "
+                                    "FROM Students "
+                                    "WHERE name LIKE '{}' AND course=?".format(query_string), (course.db_id,))
+                matches = list(self.cursor.fetchall())
         finally:
             self.lock.release()
+
+        output = list()
+        for match in matches:
+            output.append(Student(match[1], match[2], match[3], self.courses[match[4]], db_id=match[0]))
+
+        return output
