@@ -125,11 +125,16 @@ class Database:
         self.lock.acquire()
         try:
             self.cursor.execute(
-                'SELECT internal_id, name, abbreviation, id, initial_year, last_year, degree, institution '
+                'SELECT Courses.internal_id, Courses.name, Courses.abbreviation, Courses.id, Courses.initial_year,'
+                ' Courses.last_year, Degrees.internal_id, Institutions.internal_id '
                 'FROM Courses '
-                'WHERE abbreviation IS NOT NULL')
+                'JOIN Degrees ON Courses.degree = Degrees.id '
+                # FIXME, wrong info being inserted into Courses.institution. It should be = Institution.id, not i_id
+                'JOIN Institutions ON Courses.institution = Institutions.internal_id '
+                'WHERE Courses.abbreviation IS NOT NULL')
             for course in self.cursor:
-                course_obj = Course(course[0], course[1], course[2], course[6], course[7],
+                course_obj = Course(course[0], course[1], course[2],
+                                    self.degrees[course[6]], self.institutions[course[7]],
                                     initial_year=course[4], last_year=course[5], db_id=course[3])
                 courses[course[0]] = course_obj
 
@@ -915,14 +920,18 @@ class Database:
         self.lock.acquire()
         try:
             if course is None:
-                self.cursor.execute("SELECT id, internal_id, name, abbreviation, course "
+                self.cursor.execute("SELECT Students.id, Students.internal_id, Students.name,"
+                                    "Students.abbreviation, Courses.internal_id "
                                     "FROM Students "
-                                    "WHERE name LIKE '{}'".format(query_string))
+                                    "JOIN  Courses ON Courses.id = Students.course "
+                                    "WHERE Students.name LIKE '{}'".format(query_string))
                 matches = list(self.cursor.fetchall())
             else:
-                self.cursor.execute("SELECT id, internal_id, name, abbreviation, course "
+                self.cursor.execute("SELECT Students.id, Students.internal_id, Students.name,"
+                                    "Students.abbreviation, Courses.internal_id "
                                     "FROM Students "
-                                    "WHERE name LIKE '{}' AND course=?".format(query_string), (course.db_id,))
+                                    "JOIN  Courses ON Courses.id = Students.course "
+                                    "WHERE Students.name LIKE '{}' AND course=?".format(query_string), (course.db_id,))
                 matches = list(self.cursor.fetchall())
         finally:
             self.lock.release()

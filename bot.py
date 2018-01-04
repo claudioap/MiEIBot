@@ -3,6 +3,9 @@ import discord
 import sqlite3
 import logging
 
+client = discord.Client()
+settings = {}
+
 from commands import populate_commands
 
 logging.basicConfig(level=logging.INFO)
@@ -10,11 +13,6 @@ logging.basicConfig(level=logging.INFO)
 escape = '.'
 triggers = {}
 commands = {}
-
-global client
-client = discord.Client()
-global settings
-settings = {}
 
 
 def run():
@@ -32,6 +30,7 @@ async def on_ready():
 
 @client.event
 async def on_member_join(member):
+    global client
     await client.send_message(
         client.get_channel(settings['main_ch']),
         (settings['greeting']).format(member.mention))
@@ -39,6 +38,7 @@ async def on_member_join(member):
 
 @client.event
 async def on_message(message):
+    global client
     answers = 0
     if message.author == client.user:
         return

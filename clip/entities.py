@@ -48,7 +48,7 @@ class Institution(TemporalEntity):
         self.db_id = db_id
 
     def __str__(self):
-        return ("{}(id:{} db:{})".format(
+        return ("{}(ID:{} DB:{})".format(
             (self.name if self.name is not None else self.abbreviation), self.identifier, self.db_id)
                 + super().__str__())
 
@@ -63,7 +63,7 @@ class Department(TemporalEntity):
         self.db_id = db_id
 
     def __str__(self):
-        return ("{}(id:{}, inst:{}, db:{})".format(
+        return ("{}(ID:{}, Institution:{}, DB:{})".format(
             self.name, self.identifier, self.institution, self.db_id)
                 + super().__str__())
 
@@ -88,8 +88,8 @@ class Degree(IdentifiedEntity):
         self.name = name
 
     def __str__(self):
-        return ("{}({})".format(self.name, self.identifier)
-                + '' if self.db_id is None else ' (DB:{})'.format(self.db_id))
+        return ("{}".format(self.name, self.identifier)
+                + ('' if self.db_id is None else ' (DB:{})'.format(self.db_id)))
 
 
 class Class(IdentifiedEntity):
@@ -125,7 +125,7 @@ class Course(TemporalEntity):
         self.institution = institution
 
     def __str__(self):
-        return ("{}(id:{} abbr:{}, deg:{} inst:{}, db:{})".format(
+        return ("{}(ID:{} Abbreviation:{}, Degree:{} Institution:{}, DB:{})".format(
             self.name, self.identifier, self.abbreviation, self.degree, self.institution, self.db_id)
                 + super().__str__())
 
