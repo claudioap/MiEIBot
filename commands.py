@@ -1,9 +1,12 @@
 import subprocess
 from bot import client, settings
-from clip import Controller
 
-clip_controller = Controller()
-settings['course'] = clip_controller.find_course('MIEI')
+from CLIPy import CacheStorage, Clip
+
+storage = CacheStorage.postgresql(settings['clipy_uname'], settings['clipy_pwd'], settings['clipy_db'])
+clip = Clip(storage)
+
+settings['course'] = clip.find_course('MIEI', 2018)
 
 
 # Prints huge text
@@ -40,7 +43,7 @@ def command_clip(message):
     response = "Á procura de alunos pelo nome `{}`\nFiltro:`{}`\n...\n".format(message, course)
     if len(message) == 0:
         return client.send_message(channel, 'Nã conheço esse magano...')
-    possibilities = clip_controller.find_student(message, course_filter=course)
+    possibilities = clip.find_student(message, course_filter=course)
     possibilities_str = ""
     for student in possibilities:
         possibilities_str += str(student) + '\n'

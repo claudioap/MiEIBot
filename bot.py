@@ -1,12 +1,14 @@
 import re
+import traceback
+from datetime import datetime
+from time import sleep
+
 import discord
 import sqlite3
 import logging
 
 client = discord.Client()
 settings = {}
-
-from commands import populate_commands
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,8 +18,14 @@ commands = {}
 
 
 def run():
-    populate()
-    client.run(settings['token'])
+    while True:
+        try:
+            populate()
+            client.run(settings['token'])
+        except:
+            # FIXME not elegant but will do for now
+            print(f'Oops, I crashed...@{datetime.now}\n{traceback.print_exc()}')
+            sleep(10)
 
 
 @client.event
@@ -70,6 +78,7 @@ async def on_message(message):
 
 def populate():
     load_db()
+    from commands import populate_commands  # TODO more elegant solution
     populate_commands(commands)
 
 
