@@ -64,7 +64,10 @@ def command_request_validation(message):
                 return bot.send_message(channel, "Esse estudante já foi/tentou ser registado.")
 
             token = generate_token(8)
-            send_mail(email=f"{clip_abbr}@campus.fct.unl.pt", token=token)
+            try:
+                send_mail(email=f"{clip_abbr}@campus.fct.unl.pt", token=token)
+            except smtplib.SMTPException:
+                return bot.send_message(channel, f"Não consegui enviar um email para `{clip_abbr}@campus.fct.unl.pt")
             session.add(db.Student(token=token, discord_id=author, clip_abbr=clip_abbr, certainty=0))
             session.commit()
             return bot.send_message(channel,
