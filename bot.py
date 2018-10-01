@@ -4,13 +4,17 @@ from datetime import datetime
 from time import sleep
 
 import discord
-import sqlite3
 import logging
+
+from sqlalchemy.orm import Session
+
+import database as db
+
+logging.basicConfig(level=logging.INFO)
 
 client = discord.Client()
 settings = {}
-
-logging.basicConfig(level=logging.INFO)
+DBSession = db.create_session_factory()
 
 escape = '.'
 triggers = {}
@@ -83,41 +87,32 @@ def populate():
 
 
 def load_db():
-    database = sqlite3.connect('./conf/discord.db')
-    populate_settings(database)
-    populate_parser_data(database)
-    database.close()
+    db_session: Session = DBSession()
+    populate_settings(db_session)
+    populate_parser_data(db_session)
+    DBSession.remove()
 
 
-def populate_settings(database):
-    db_cursor = database.cursor()
-    db_cursor.execute(
-        'SELECT name, value'
-        ' FROM Settings')
+def populate_settings(db_session: Session):
     global settings
-    settings = {row[0]: row[1] for row in db_cursor.fetchall()}
+    settings = {setting.name: setting.value for setting in db_session.query(db.Setting)}
 
 
-def populate_parser_data(database):
-    db_cursor = database.cursor()
-    db_cursor.execute(
-        'SELECT Expressions.regex, Expressions.message, Embeds.url'
-        ' FROM Expressions'
-        ' LEFT JOIN Embeds ON Expressions.embed_name = Embeds.name')
-
-    for row in db_cursor.fetchall():
-        if row[2] is None and row[1] is not None:
-            triggers[re.compile(row[0])] = lambda message, text=row[1]: client.send_message(message.channel, text)
-        elif row[2] is not None:
+def populate_parser_data(db_session: Session):
+    for expression in db_session.query(db.Expression):
+        if expression.embed is None and expression.message is not None:
+            triggers[re.compile(expression.regex)] = \
+                lambda message, text=expression.message: \
+                    client.send_message(message.channel, text)
+        elif expression.embed is not None:
             embed = discord.Embed()
-            embed.set_image(url=row[2])
-            if row[1] is None:
-                triggers[re.compile(row[0])] = lambda message, embed=embed: client.send_message(message.channel,
-                                                                                                embed=embed)
+            embed.set_image(url=expression.embed.url)
+            if expression.message is None:
+                triggers[re.compile(expression.regex)] = \
+                    lambda message, embed=embed: client.send_message(message.channel, embed=embed)
             else:
-                triggers[re.compile(row[0])] = lambda message, text=row[1], embed=embed: client.send_message(
-                    message.channel,
-                    text,
-                    embed=embed)
+                triggers[re.compile(expression.regex)] = \
+                    lambda message, text=expression.message, embed=embed: \
+                        client.send_message(message.channel, text, embed=embed)
         else:
-            print("Invalid row: " + str(row))
+            print(f"Invalid row: {expression}")
