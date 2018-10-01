@@ -21,7 +21,7 @@ class Setting(Base):
 
 class Student(Base):
     __tablename__ = 'students'
-    discord_id = sa.Column(sa.String(50), primary_key=True)
+    discord_id = sa.Column(sa.String(50), unique=True)
     clip_abbr = sa.Column(sa.String(50), primary_key=True)
     certainty = sa.Column(sa.Integer)
     token = sa.Column(sa.String(10))

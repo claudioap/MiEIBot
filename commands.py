@@ -90,7 +90,6 @@ async def command_validate(message):
         return bot.send_message(channel, "Não encontrei a role certa para ti. Alguém mexeu onde não devia!\n"
                                          "Lamento mas vais ter de esperar que um dos mods veja isto.\n"
                                          "Podes mandar-lhes mensagem.")
-    await bot.add_roles(author, role)
     session: Session = DBSession()
     student_validation: db.Student = session.query(db.Student).filter_by(discord_id=str(author)).first()
     print(f'Asked to validate {author} with token {token}')
@@ -100,6 +99,7 @@ async def command_validate(message):
         elif student_validation.token == token:
             student_validation.certainty = 1
             session.commit()
+            await bot.add_roles(author, role)
             return bot.send_message(channel, "Validado com sucesso.")
         else:
             return bot.send_message(channel, "Token incorreto.")
