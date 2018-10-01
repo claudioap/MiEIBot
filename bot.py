@@ -12,7 +12,7 @@ import database as db
 
 logging.basicConfig(level=logging.INFO)
 
-client = discord.Client()
+bot = discord.Client()
 settings = {}
 DBSession = db.create_session_factory()
 
@@ -25,34 +25,34 @@ def run():
     while True:
         try:
             populate()
-            client.run(settings['token'])
+            bot.run(settings['token'])
         except:
             # FIXME not elegant but will do for now
             print(f'Oops, I crashed...@{datetime.now}\n{traceback.print_exc()}')
             sleep(10)
 
 
-@client.event
+@bot.event
 async def on_ready():
     print('Logged in as')
-    print(client.user.name)
-    print(client.user.id)
+    print(bot.user.name)
+    print(bot.user.id)
     print('------')
 
 
-@client.event
+@bot.event
 async def on_member_join(member):
-    global client
-    await client.send_message(
-        client.get_channel(settings['main_ch']),
+    global bot
+    await bot.send_message(
+        bot.get_channel(settings['main_ch']),
         (settings['greeting']).format(member.mention))
 
 
-@client.event
+@bot.event
 async def on_message(message):
-    global client
+    global bot
     answers = 0
-    if message.author == client.user:
+    if message.author == bot.user:
         return
 
     if message.content.startswith(escape):
@@ -70,7 +70,7 @@ async def on_message(message):
             print("Unknown command: " + command)
 
         if delete_parent:
-            await client.delete_message(message)
+            await bot.delete_message(message)
     else:
         for expression in triggers:
             if expression.search(message.content):
@@ -103,16 +103,16 @@ def populate_parser_data(db_session: Session):
         if expression.embed is None and expression.message is not None:
             triggers[re.compile(expression.regex)] = \
                 lambda message, text=expression.message: \
-                    client.send_message(message.channel, text)
+                    bot.send_message(message.channel, text)
         elif expression.embed is not None:
             embed = discord.Embed()
             embed.set_image(url=expression.embed.url)
             if expression.message is None:
                 triggers[re.compile(expression.regex)] = \
-                    lambda message, embed=embed: client.send_message(message.channel, embed=embed)
+                    lambda message, embed=embed: bot.send_message(message.channel, embed=embed)
             else:
                 triggers[re.compile(expression.regex)] = \
                     lambda message, text=expression.message, embed=embed: \
-                        client.send_message(message.channel, text, embed=embed)
+                        bot.send_message(message.channel, text, embed=embed)
         else:
             print(f"Invalid row: {expression}")
