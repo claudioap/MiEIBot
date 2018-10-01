@@ -1,3 +1,4 @@
+import asyncio
 import random
 import re
 import smtplib
@@ -67,22 +68,30 @@ def command_request_validation(message):
             try:
                 send_mail(email=f"{clip_abbr}@campus.fct.unl.pt", token=token)
             except smtplib.SMTPException:
-                return bot.send_message(channel, f"Não consegui enviar um email para `{clip_abbr}@campus.fct.unl.pt")
+                return asyncio.gather(
+                    bot.delete_message(message),
+                    bot.send_message(channel,
+                                     "Não consegui enviar um email para "
+                                     f"`{clip_abbr[:2]}{(len(clip_abbr)-2)*'*'}@campus.fct.unl.pt"))
             session.add(db.Student(token=token, discord_id=author, clip_abbr=clip_abbr, certainty=0))
             session.commit()
-            return bot.send_message(channel,
-                                    f"Enviado email de confirmação para `{clip_abbr}@campus.fct.unl.pt`\n"
-                                    "Responde `.validar [código]` a esta mensagem")
+            return asyncio.gather(bot.delete_message(message),
+                                  bot.send_message(
+                                      channel,
+                                      "Enviado email de confirmação para "
+                                      f"`{clip_abbr[:2]}{(len(clip_abbr)-2)*'*'}@campus.fct.unl.pt`\n"
+                                      "Responde `.validar [código]` a esta mensagem"))
         else:
             return bot.send_message(channel, "Já se encontra uma validação em progresso para ti.")
     finally:
         DBSession.remove()
 
 
-async def command_validate(message):
+def command_validate(message):
     channel = message.channel
-    token = message.content.lstrip('.')[8:]  # removes the dots and 'valida '
+    token = message.content.lstrip('.')[8:]  # removes the dots and 'validar '
     author = message.author
+
     if not hasattr(message.author, 'server'):
         return bot.send_message(channel, "Manda-me uma mensagem no servidor não por PM.")
     role = discord.utils.get(message.author.server.roles, name="Verificado")
@@ -93,14 +102,16 @@ async def command_validate(message):
     session: Session = DBSession()
     student_validation: db.Student = session.query(db.Student).filter_by(discord_id=str(author)).first()
     print(f'Asked to validate {author} with token {token}')
+
     try:
         if student_validation is None:
             return bot.send_message(channel, "Não me lembro de ti...")
         elif student_validation.token == token:
             student_validation.certainty = 1
             session.commit()
-            await bot.add_roles(author, role)
-            return bot.send_message(channel, "Validado com sucesso.")
+            return asyncio.gather(
+                bot.add_roles(author, role),
+                bot.send_message(channel, "Validado com sucesso."))
         else:
             return bot.send_message(channel, "Token incorreto.")
     finally:
