@@ -1,4 +1,5 @@
 import random
+import re
 import smtplib
 import string
 import subprocess
@@ -51,6 +52,8 @@ def command_penis(message):
 def command_request_validation(message):
     channel = message.channel
     clip_abbr = message.content.lstrip('.')[4:]  # removes the dots and 'sou '
+    if not valid_clip_nick(clip_abbr):
+        return bot.send_message(channel, "Não me parece que seja esse o teu nick do clip...")
     author = str(message.author)
     session: Session = DBSession()
     user_validation = session.query(db.Student).filter_by(discord_id=author).first()
@@ -140,3 +143,12 @@ def send_mail(email, token):
     server.login(settings['email_user'], settings['email_password'])
     server.sendmail(settings['email_user'], email, msg.as_string())
     server.quit()
+
+
+def valid_clip_nick(clip_abbr) -> bool:
+    if len(clip_abbr) < 5:
+        return False
+    exp = re.compile('^[a-z.]*$')
+    if exp.fullmatch(clip_abbr) is None:
+        return False
+    return True
