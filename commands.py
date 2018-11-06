@@ -160,7 +160,7 @@ def send_mail(email, token):
 
 
 def valid_clip_nick(clip_abbr) -> bool:
-    if len(clip_abbr) < 5:
+    if len(clip_abbr) < 3:
         return False
     exp = re.compile('^[a-z.]+[0-9]*$')
     if exp.fullmatch(clip_abbr) is None:
