@@ -4,7 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 
 
 def create_session_factory():
-    engine = sa.create_engine('sqlite:///conf/discord.db', echo=False)
+    engine = sa.create_engine('sqlite:///conf/database.db', echo=False)
     session_factory = sa.orm.sessionmaker(bind=engine)
     return sa.orm.scoped_session(session_factory)
 
