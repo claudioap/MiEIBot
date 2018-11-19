@@ -1,3 +1,4 @@
+import random
 import re
 import traceback
 from datetime import datetime
@@ -19,7 +20,7 @@ DBSession = db.create_session_factory()
 escape = '.'
 triggers = {}
 commands = {}
-
+trigger_probability = 0.05  # Temporary fix
 
 def run():
     while True:
@@ -73,7 +74,7 @@ async def on_message(message):
             await bot.delete_message(message)
     else:
         for expression in triggers:
-            if expression.search(message.content):
+            if expression.search(message.content) and random.random() < trigger_probability:
                 answers += 1
                 await triggers[expression](message)
                 if answers >= 2:
