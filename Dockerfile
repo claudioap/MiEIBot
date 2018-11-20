@@ -1,7 +1,7 @@
 FROM python:3.6
 
 # Install SQLite dependency
-RUN apt -y update && apt install -y sqlite3
+RUN apt -y update && apt install -y sqlite3 toilet
 
 WORKDIR /usr/src/app
 
@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r pip-packages
 # Move sources
 COPY source/ .
 
-# Set for export
+# Set database location for export
 VOLUME /var/MiEIBot/
 
-CMD [ "python", "__main__.py" ]
+CMD [ "python3", "__main__.py" ]
